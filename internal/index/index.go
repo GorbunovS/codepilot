@@ -87,6 +87,11 @@ func SourceFiles(root string) ([]string, error) {
 	return files, nil
 }
 
+// Logf — необязательный лог прогресса индексации; по умолчанию молчит.
+// CLI подставляет вывод в stderr, веб-панель — свой буфер.
+// Не потокобезопасно: подменять до запуска индексации.
+var Logf = func(format string, args ...any) {}
+
 // Build выполняет полную или инкрементальную индексацию: по manifest
 // переиндексируются только изменённые/новые файлы, удалённые выбрасываются.
 // Файл индекса читается, но не сохраняется (для этого — Save).
@@ -108,6 +113,7 @@ func Build(root string) (*Index, Stats, error) {
 	if err != nil {
 		return nil, st, err
 	}
+	Logf("index: %s: файлов к обходу %d", abs, len(files))
 	seen := map[string]bool{}
 	for _, rel := range files {
 		src, err := os.ReadFile(filepath.Join(abs, filepath.FromSlash(rel)))
@@ -117,6 +123,9 @@ func Build(root string) (*Index, Stats, error) {
 		h := chunk.HashBytes(src)
 		seen[rel] = true
 		st.Files++
+		if st.Files%500 == 0 {
+			Logf("index: обработано %d/%d файлов", st.Files, len(files))
+		}
 		if kept, ok := old[rel]; ok && len(kept) > 0 && kept[0].Hash == h {
 			ix.Chunks = append(ix.Chunks, kept...)
 			st.Kept++
@@ -140,6 +149,8 @@ func Build(root string) (*Index, Stats, error) {
 	})
 	st.Chunks = len(ix.Chunks)
 	ix.buildModel()
+	Logf("index: чанкинг завершён: файлов %d, чанков %d (переиндексировано %d, без изменений %d, удалено %d)",
+		st.Files, st.Chunks, st.Reindexed, st.Kept, st.Removed)
 	return ix, st, nil
 }
 

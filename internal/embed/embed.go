@@ -36,8 +36,12 @@ type Embedder struct {
 	session *ort.Session
 	tok     *tokenizer.Tokenizer
 
-	mu sync.Mutex // tokenizer и session не потокобезопасны
+	mu      sync.Mutex // tokenizer и session не потокобезопасны
+	skipped int        // текстов, на которых токенизатор упал с паникой
 }
+
+// Skipped — сколько текстов было заменено пустыми из-за паники токенизатора.
+func (e *Embedder) Skipped() int { return e.skipped }
 
 // Load загружает модель из dir: tokenizer.json + model.onnx.
 // Нативная библиотека onnxruntime ищется через ortlib.Find(dir).
@@ -111,11 +115,10 @@ func (e *Embedder) embedPrefixed(prefix string, texts []string) ([][]float32, er
 	encs := make([][]int64, b)
 	var L int
 	for i, t := range texts {
-		enc, err := e.tok.EncodeSingle(prefix+t, true)
+		ids, err := e.encodeSafe(prefix + t)
 		if err != nil {
 			return nil, fmt.Errorf("embed: токенизация: %w", err)
 		}
-		ids := enc.Ids
 		if len(ids) > MaxTokens {
 			ids = ids[:MaxTokens]
 		}
@@ -186,6 +189,30 @@ func (e *Embedder) embedPrefixed(prefix string, texts []string) ([][]float32, er
 		out[i] = meanPoolNorm(data[i*L*Dim:(i+1)*L*Dim], att[i*L:(i+1)*L])
 	}
 	return out, nil
+}
+
+// encodeSafe токенизирует текст, перехватывая панику sugarme/tokenizer на
+// «ядовитых» входах (напр. Metaspace: slice bounds out of range на экзотике
+// юникода). Такой текст заменяется пустым — вектор получается нулевым,
+// но индексация проекта продолжается.
+func (e *Embedder) encodeSafe(text string) (ids []int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			e.skipped++
+			fmt.Fprintf(os.Stderr, "embed: паника токенизатора на тексте %d байт, чанк получит нулевой вектор: %v\n", len(text), r)
+			enc, e2 := e.tok.EncodeSingle("", true)
+			if e2 != nil {
+				err = e2
+				return
+			}
+			ids = enc.Ids
+		}
+	}()
+	enc, err := e.tok.EncodeSingle(text, true)
+	if err != nil {
+		return nil, err
+	}
+	return enc.Ids, nil
 }
 
 // meanPoolNorm — mean pooling по маске + L2-нормализация (cosine = dot).

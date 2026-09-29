@@ -132,6 +132,7 @@ func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error)
 		}
 	}
 	if emb != nil {
+		Logf("pg: векторов к пересчёту %d (батчи по %d)", len(need), embedBatch)
 		for off := 0; off < len(need); off += embedBatch {
 			end := off + embedBatch
 			if end > len(need) {
@@ -149,6 +150,9 @@ func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error)
 				vectors[i] = vecs[j]
 			}
 			embedded += len(vecs)
+			if batch := off / embedBatch; batch%64 == 0 || end == len(need) {
+				Logf("pg: эмбеддинги %d/%d", end, len(need))
+			}
 		}
 	}
 

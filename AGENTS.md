@@ -36,6 +36,7 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
 | `internal/ortlib/` | поиск нативной onnxruntime (.dll/.dylib/.so), env `CODEPILOT_ONNXRUNTIME_DLL` |
 | `internal/laya/` | слой решений: интерфейс `Scorer` (Score 0..5, Noul 0..1), эвристика (laya.go), ONNX-модель (onnx.go) |
 | `internal/mcp/` | MCP stdio-сервер: newline-delimited JSON-RPC 2.0, 4 инструмента, лог `mcp-calls.jsonl` |
+| `internal/web/` | веб-панель (`web`): SPA на Vue 3/Chart.js (CDN, `static/index.html`, go:embed) + JSON API на stdlib net/http; список проектов в `~/.codepilot/projects.json`, индексация в горутине с логом через `index.Logf` (хук глобальный — восстанавливается после прогона, одновременно один проект) |
 | `internal/eval/` | метрики A=fts B=vec C=hybrid D=hybrid+rerank E=hybrid+blend |
 | `internal/bench/` | симуляция двух агентов; токены = байты/4; RAG-агент всегда `hybrid+blend` |
 | `sample_project/` | демо-репозиторий для eval/bench |
@@ -52,7 +53,8 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
   vendored `onnxruntime-purego` (replace в go.mod). Новые зависимости — только
   после проверки отсутствия cgo.
 - **stdout у `serve` — канал MCP-протокола.** Любой служебный вывод — только в stderr,
-  иначе сломается JSON-RPC.
+  иначе сломается JSON-RPC. stdout у `web` не протокольный, но служебный вывод панели
+  тоже только в stderr — панель не должна ломать остальные команды CLI.
 - **SQLite — не векторная база.** `index.db` хранит чанки и манифест; BM25/TF-IDF
   перестраиваются в памяти при каждом `Load` (`buildModel`). «Векторный» поиск —
   TF-IDF cosine, настоящих эмбеддингов нет.

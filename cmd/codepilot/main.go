@@ -6,6 +6,7 @@
 //	codepilot serve --project sample_project
 //	codepilot eval [--laya onnx]
 //	codepilot bench [--laya onnx]
+//	codepilot web [--addr 127.0.0.1:8080]
 package main
 
 import (
@@ -21,6 +22,7 @@ import (
 	"codepilot/internal/index"
 	"codepilot/internal/laya"
 	"codepilot/internal/mcp"
+	"codepilot/internal/web"
 )
 
 func main() {
@@ -40,6 +42,8 @@ func main() {
 		err = cmdEval(os.Args[2:])
 	case "bench":
 		err = cmdBench(os.Args[2:])
+	case "web":
+		err = cmdWeb(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -63,11 +67,13 @@ func usage() {
                                 find_references, read_span)
   codepilot eval                Recall@k/MRR по золотому датасету, отчёт в eval/report.md
   codepilot bench               расход токенов: baseline (grep+read) vs RAG
+  codepilot web                 локальная веб-панель (десктоп-обёртка — Pake)
 
 Флаги search: --project . --mode hybrid+rerank --top 5 --content [--laya onnx]
 Флаги serve:  --project . --log mcp-calls.jsonl [--laya onnx]
 Флаги eval:   --project sample_project --dataset eval/golden_dataset.json [--laya onnx]
 Флаги bench:  --project sample_project --dataset eval/golden_dataset.json [--laya onnx]
+Флаги web:    --addr 127.0.0.1:8080 --log mcp-calls.jsonl [хранилище, --laya]
 
 Хранилище: --store sqlite (по умолчанию) | --store pg (Postgres+pgvector,
   --pg-dsn, --embed onnx [--embed-dir models/e5-small]).
@@ -179,6 +185,7 @@ func cmdIndex(args []string) error {
 	if root == "" {
 		root = "."
 	}
+	index.Logf = func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }
 	ix, st, err := index.Build(root)
 	if err != nil {
 		return err
@@ -210,6 +217,9 @@ func cmdIndex(args []string) error {
 		}
 		fmt.Printf("%s (pg): файлов %d, чанков %d (переиндексировано %d, без изменений %d, удалено %d), векторов пересчитано %d\n",
 			ix.ProjectRoot, st.Files, st.Chunks, st.Reindexed, st.Kept, st.Removed, embedded)
+		if n := emb.Skipped(); n > 0 {
+			fmt.Printf("внимание: %d чанков получили нулевой вектор (паника токенизатора, см. stderr)\n", n)
+		}
 	default:
 		return fmt.Errorf("неизвестное хранилище %q (sqlite|pg)", *sf.store)
 	}
@@ -310,6 +320,34 @@ func cmdServe(args []string) error {
 	// stdout — канал протокола MCP, всё служебное только в stderr.
 	fmt.Fprintf(os.Stderr, "codepilot serve: проект %s, чанков %d; слушаю stdio\n", ix.ProjectRoot, len(ix.Chunks))
 	return mcp.Serve(ix, *logPath, os.Stdin, os.Stdout, scorer)
+}
+
+// cmdWeb — локальная веб-панель: проекты, индексация, статистика MCP-вызовов.
+// stdout у web не протокольный, но служебный вывод всё равно идёт в stderr.
+func cmdWeb(args []string) error {
+	fs := flag.NewFlagSet("web", flag.ExitOnError)
+	addr := fs.String("addr", "127.0.0.1:8080", "адрес HTTP-сервера панели")
+	logPath := fs.String("log", "mcp-calls.jsonl", "jsonl-лог вызовов инструментов (для статистики нагрузки)")
+	layaKind, layaDir := layaFlags(fs)
+	sf := storeFlags(fs)
+	_ = fs.Parse(args)
+	bin, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if bin, err = filepath.Abs(bin); err != nil {
+		return err
+	}
+	return web.Serve(*addr, web.Options{
+		Store:    *sf.store,
+		PGDSN:    *sf.dsn,
+		Embed:    *sf.embed,
+		EmbedDir: *sf.embedDir,
+		Laya:     *layaKind,
+		LayaDir:  *layaDir,
+		LogPath:  *logPath,
+		BinPath:  bin,
+	})
 }
 
 func cmdEval(args []string) error {
