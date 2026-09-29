@@ -76,10 +76,69 @@ func (j *indexJob) snapshot() (bool, []string, string) {
 type server struct {
 	opts      Options
 	projectsF string
+	jobsF     string
 	mu        sync.Mutex // сериализует индексацию и доступ к projects
 	projects  []project
 	jobs      map[string]*indexJob
 	indexing  bool // идёт индексация (глобально, максимум один проект)
+}
+
+// persistedJob — дисковый слепок состояния индексации проекта.
+type persistedJob struct {
+	Path string   `json:"path"`
+	Last string   `json:"last"`
+	Log  []string `json:"log"`
+}
+
+func (j *indexJob) persist() persistedJob {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return persistedJob{Last: j.Last, Log: append([]string(nil), j.log...)}
+}
+
+func (s *server) loadJobs() {
+	data, err := os.ReadFile(s.jobsF)
+	if err != nil {
+		return
+	}
+	var list []persistedJob
+	if err := json.Unmarshal(data, &list); err != nil {
+		return
+	}
+	for _, p := range list {
+		if p.Path == "" {
+			continue
+		}
+		s.jobs[p.Path] = &indexJob{Last: p.Last, log: append([]string(nil), p.Log...)}
+	}
+}
+
+func (s *server) saveJobs() {
+	s.mu.Lock()
+	jobs := make([]persistedJob, 0, len(s.jobs))
+	for path, j := range s.jobs {
+		pj := j.persist()
+		if pj.Last == "" && len(pj.Log) == 0 {
+			continue
+		}
+		pj.Path = path
+		jobs = append(jobs, pj)
+	}
+	s.mu.Unlock()
+	if len(jobs) == 0 {
+		_ = os.Remove(s.jobsF)
+		return
+	}
+	sort.Slice(jobs, func(i, j int) bool { return jobs[i].Path < jobs[j].Path })
+	data, err := json.MarshalIndent(jobs, "", "  ")
+	if err != nil {
+		return
+	}
+	tmp := s.jobsF + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, s.jobsF)
 }
 
 // Serve поднимает HTTP-сервер панели на addr и блокируется до ошибки.
@@ -95,11 +154,13 @@ func Serve(addr string, opts Options) error {
 	s := &server{
 		opts:      opts,
 		projectsF: filepath.Join(confDir, "projects.json"),
+		jobsF:     filepath.Join(confDir, "jobs.json"),
 		jobs:      map[string]*indexJob{},
 	}
 	if data, err := os.ReadFile(s.projectsF); err == nil {
 		_ = json.Unmarshal(data, &s.projects)
 	}
+	s.loadJobs()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
@@ -325,6 +386,7 @@ func (s *server) runIndex(root, device string, j *indexJob) {
 		s.mu.Lock()
 		s.indexing = false
 		s.mu.Unlock()
+		s.saveJobs()
 	}()
 	finish := func(err error) {
 		j.mu.Lock()

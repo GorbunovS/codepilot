@@ -36,7 +36,7 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
 | `internal/ortlib/` | поиск нативной onnxruntime (.dll/.dylib/.so), env `CODEPILOT_ONNXRUNTIME_DLL` |
 | `internal/laya/` | слой решений: интерфейс `Scorer` (Score 0..5, Noul 0..1), эвристика (laya.go), ONNX-модель (onnx.go) |
 | `internal/mcp/` | MCP stdio-сервер: newline-delimited JSON-RPC 2.0, 4 инструмента, лог `mcp-calls.jsonl` |
-| `internal/web/` | веб-панель (`web`): SPA на Vue 3/Chart.js (CDN, `static/index.html`, go:embed) + JSON API на stdlib net/http; список проектов в `~/.codepilot/projects.json`, индексация в горутине с логом через `index.Logf` (хук глобальный — восстанавливается после прогона, одновременно один проект) |
+| `internal/web/` | веб-панель (`web`): SPA на Vue 3/Chart.js (CDN, `static/index.html`, go:embed) + JSON API на stdlib net/http; список проектов в `~/.codepilot/projects.json`, состояние последних прогонов — в `~/.codepilot/jobs.json`; индексация в горутине с логом через `index.Logf` (хук глобальный — восстанавливается после прогона, одновременно один проект) |
 | `internal/eval/` | метрики A=fts B=vec C=hybrid D=hybrid+rerank E=hybrid+blend |
 | `internal/bench/` | симуляция двух агентов; токены = байты/4; RAG-агент всегда `hybrid+blend` |
 | `sample_project/` | демо-репозиторий для eval/bench |
@@ -96,6 +96,14 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
   Токенизатор e5/Laya может паниковать на экзотике юникода — panic ловится
   в `embed.encodeSafe`, чанк получает нулевой вектор, счётчик — `Skipped()`.
 - Комментарии в коде и сообщения коммитов — на русском.
+- **Состояние прогонов панели (`~/.codepilot/jobs.json`) сохраняется между
+  перезапусками.** После рестарта `./codepilot web` `last_result` и хвост лога
+  каждого проекта восстанавливаются из файла; живой прогресс, как и раньше,
+  транслируется через in-memory задачу.
+- **Windows: MLX-сайдкар не работает.** Дома на Windows используй `--embed onnx`
+  (нужен `bin/onnxruntime.dll` или `CODEPILOT_ONNXRUNTIME_DLL`) либо SQLite/TF-IDF
+  без `--store pg`. Панель (`./codepilot.exe web`) и MCP (`serve`) работают как
+  есть; конфиг и проекты лежат в `%USERPROFILE%\.codepilot`.
 
 ## Контракты, от которых зависят другие части
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -72,10 +73,59 @@ func (r *RemoteEmbedder) CheckDim() error {
 // Close освобождает keep-alive соединения.
 func (r *RemoteEmbedder) Close() { r.hc.CloseIdleConnections() }
 
+// PreferredBatch — сколько текстов забирать за раз из индексера. Локальный
+// ONNX не реализует — там предел ставит компилятор CoreML.
+func (r *RemoteEmbedder) PreferredBatch() int { return 512 }
+
+// Подбатч и число запросов в полёте. Инференс на GPU — узкое место: больше
+// двух запросов одновременно не ускоряет, но создаёт contention с GUI
+// (WindowServer) — система начинает подтормаживать.
+const (
+	remoteSubBatch = 64
+	remoteInflight = 2
+)
+
 func (r *RemoteEmbedder) embed(prefix string, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return nil, nil
 	}
+	n := (len(texts) + remoteSubBatch - 1) / remoteSubBatch
+	out := make([][]float32, len(texts))
+	sem := make(chan struct{}, remoteInflight)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+	for p := 0; p < n; p++ {
+		off := p * remoteSubBatch
+		end := off + remoteSubBatch
+		if end > len(texts) {
+			end = len(texts)
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(off, end int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			vecs, err := r.post(prefix, texts[off:end])
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				return
+			}
+			copy(out[off:end], vecs)
+		}(off, end)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return out, nil
+}
+
+func (r *RemoteEmbedder) post(prefix string, texts []string) ([][]float32, error) {
 	body, err := json.Marshal(embedRequest{Texts: texts, Prefix: prefix})
 	if err != nil {
 		return nil, err

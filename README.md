@@ -232,6 +232,9 @@ MCP-инструментов (графики), готовый сниппет MCP
 ./codepilot web --addr 127.0.0.1:8080 --log mcp-calls.jsonl [--store pg --embed onnx] [--laya onnx]
 ```
 
+Состояние последних прогонов индексации сохраняется в `~/.codepilot/jobs.json`;
+после перезапуска панели история и итоговая строка `last_result` не теряются.
+
 Десктоп-обёртка (Pake, окно поверх панели — бэкенд не поднимает):
 
 ```bash
@@ -248,3 +251,21 @@ go test ./internal/...     # чанкеры (Go/Vue/fallback), токениза�
 Git post-commit hook — `scripts/post-commit` (скопировать в `.git/hooks/`):
 после коммита индекс обновляется инкрементально, новый код сразу находится
 поиском (проверено на демо-репозитории `sample_project/`).
+
+## Продолжение работы на Windows (без MLX)
+
+MLX-сайдкар — только Apple Silicon. Дома на Windows используй локальный ONNX
+для эмбеддингов (или TF-IDF/SQLite, если модель не нужна):
+
+```powershell
+# PowerShell
+# 1. onnxruntime в bin/onnxruntime.dll (или путь через CODEPILOT_ONNXRUNTIME_DLL)
+go build -o codepilot.exe ./cmd/codepilot
+./codepilot.exe index C:\Users\you\pnodes --store pg --embed onnx
+./codepilot.exe web --addr 127.0.0.1:8080 --store pg --embed onnx --laya onnx
+# панель ищет тот же проект по тому же абсолютному пути
+```
+
+Postgres для pg-режима — `docker compose up -d db` через WSL2 или локальный
+Postgres с pgvector. Проекты и история прогонов живут в `%USERPROFILE%\.codepilot`
+(Windows-эквивалент `~/.codepilot`).

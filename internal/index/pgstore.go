@@ -97,6 +97,16 @@ func (s *PGStore) Close() { s.pool.Close() }
 // на [32, 128|256|512] CoreML работает (~2x CPU на M1 Max).
 const embedBatch = 32
 
+// batchFor возвращает размер батча под эмбеддер: удалённый (MLX-сайдкар)
+// берёт крупнее — у него накладные расходы на HTTP-раундтрип, а не на форму.
+func batchFor(emb PassageEmbedder) int {
+	type preferrer interface{ PreferredBatch() int }
+	if p, ok := emb.(preferrer); ok && p.PreferredBatch() > 0 {
+		return p.PreferredBatch()
+	}
+	return embedBatch
+}
+
 // saveCommitBatch — сколько чанков пишется в одной транзакции. Порционные
 // коммиты делают индексацию перезапускаемой: при обрыве (таймаут, сон
 // машины) уже записанные вектора не теряются, следующий запуск пересчитает
@@ -146,7 +156,7 @@ func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error)
 		sort.Slice(need, func(a, b int) bool {
 			return len(passageText(ix.Chunks[need[a]])) < len(passageText(ix.Chunks[need[b]]))
 		})
-		Logf("pg: векторов к пересчёту %d (батчи по %d, коммит каждые %d)", len(need), embedBatch, saveCommitBatch)
+		Logf("pg: векторов к пересчёту %d (батчи по %d, коммит каждые %d)", len(need), batchFor(emb), saveCommitBatch)
 	}
 
 	upsert := `INSERT INTO chunks
@@ -158,6 +168,10 @@ func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error)
 		symbol_name=$7, kind=$8, signature=$9, doc=$10, content=$11,
 		hash=$12, embedding=$13`
 
+	batch := embedBatch
+	if emb != nil {
+		batch = batchFor(emb)
+	}
 	for off := 0; off < len(need); off += saveCommitBatch {
 		// Отмена между порционными коммитами: записанное не теряется.
 		if CheckAbort != nil && CheckAbort() {
@@ -170,8 +184,8 @@ func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error)
 		part := need[off:end]
 		vectors := map[int][]float32{}
 		if emb != nil {
-			for boff := 0; boff < len(part); boff += embedBatch {
-				bend := boff + embedBatch
+			for boff := 0; boff < len(part); boff += batch {
+				bend := boff + batch
 				if bend > len(part) {
 					bend = len(part)
 				}
@@ -186,7 +200,7 @@ func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error)
 				for j, i := range part[boff:bend] {
 					vectors[i] = vecs[j]
 				}
-				if b := boff / embedBatch; b%16 == 0 {
+				if b := boff / batch; b%2 == 0 {
 					Logf("pg: эмбеддинги %d/%d", off+bend, len(need))
 				}
 			}
