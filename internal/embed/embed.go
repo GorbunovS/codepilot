@@ -177,6 +177,10 @@ func (e *Embedder) embedPrefixed(prefix string, texts []string) ([][]float32, er
 			L = len(row)
 		}
 	}
+	// Паддинг до фиксированных ведёр, а не до точного максимума батча:
+	// у onnxruntime/CoreML форма входа стабильная (3 варианта вместо тысяч),
+	// иначе CoreML перекомпилирует партиции почти на каждый батч.
+	L = bucketLen(L)
 	inputIDs := make([]int64, b*L)
 	att := make([]int64, b*L)
 	ttype := make([]int64, b*L)
@@ -259,6 +263,21 @@ func (e *Embedder) encodeSafe(text string) (ids []int, err error) {
 		return nil, err
 	}
 	return enc.Ids, nil
+}
+
+// padBuckets — фиксированные длины входа эмбеддера. Ограничение набора форм
+// критично для CoreML (компиляция под каждую форму) и уменьшает лишний
+// паддинг на CPU. Последнее ведро = MaxTokens.
+var padBuckets = []int{128, 256, MaxTokens}
+
+// bucketLen округляет длину последовательности вверх до ближайшего ведра.
+func bucketLen(n int) int {
+	for _, b := range padBuckets {
+		if n <= b {
+			return b
+		}
+	}
+	return MaxTokens
 }
 
 // meanPoolNorm — mean pooling по маске + L2-нормализация (cosine = dot).

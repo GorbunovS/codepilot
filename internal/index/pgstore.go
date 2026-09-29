@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"codepilot/internal/chunk"
@@ -91,8 +92,9 @@ func OpenPG(dsn string) (*PGStore, error) {
 // Close закрывает пул соединений.
 func (s *PGStore) Close() { s.pool.Close() }
 
-// embedBatch — размер батча при прогоне чанков через эмбеддер.
-const embedBatch = 32
+// embedBatch — размер батча при прогоне чанков через эмбеддер. 128: на GPU
+// (CoreML/CUDA) крупный батч амортизирует передачу данных, на CPU разницы нет.
+const embedBatch = 128
 
 // saveCommitBatch — сколько чанков пишется в одной транзакции. Порционные
 // коммиты делают индексацию перезапускаемой: при обрыве (таймаут, сон
@@ -137,6 +139,12 @@ func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error)
 		}
 	}
 	if emb != nil && len(need) > 0 {
+		// Сортируем по длине текста: батчи получаются однородными, все три
+		// ведра паддинга встречаются компактно — стабильные формы для CoreML
+		// и меньше лишнего паддинга на CPU.
+		sort.Slice(need, func(a, b int) bool {
+			return len(passageText(ix.Chunks[need[a]])) < len(passageText(ix.Chunks[need[b]]))
+		})
 		Logf("pg: векторов к пересчёту %d (батчи по %d, коммит каждые %d)", len(need), embedBatch, saveCommitBatch)
 	}
 
