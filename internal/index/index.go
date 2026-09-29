@@ -28,7 +28,8 @@ type Index struct {
 
 	// Emb и PG подключают векторный режим (e5 + pgvector); nil — легаси TF-IDF.
 	// Заполняются снаружи (CLI) после Load, в хранилище не сериализуются.
-	Emb *embed.Embedder `json:"-"`
+	// Emb — локальный ONNX (embed.Embedder) или MLX-сайдкар (embed.RemoteEmbedder).
+	Emb embed.TextEmbedder `json:"-"`
 	PG  *PGStore        `json:"-"`
 
 	tf    []map[string]int

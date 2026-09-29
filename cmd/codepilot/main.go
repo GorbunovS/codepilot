@@ -78,6 +78,8 @@ func usage() {
 Хранилище: --store sqlite (по умолчанию) | --store pg (Postgres+pgvector,
   --pg-dsn, --embed onnx [--embed-dir models/e5-small]).
   Переменные: CODEPILOT_STORE, CODEPILOT_PG_DSN, CODEPILOT_EMBED.
+  --embed-server URL — эмбеддинги через MLX-сайдкар (tools/mlx-sidecar/run.sh)
+  вместо локального ONNX (CODEPILOT_EMBED_SERVER).
 
 Устройство инференса: --device cpu (по умолчанию) | coreml | cuda
   (CODEPILOT_DEVICE); если провайдера нет в сборке onnxruntime — fallback на CPU.
@@ -110,11 +112,12 @@ func closeScorer(s laya.Scorer) {
 
 // storeFlagsT — общие флаги хранилища и эмбеддингов для всех команд.
 type storeFlagsT struct {
-	store    *string
-	dsn      *string
-	embed    *string
-	embedDir *string
-	device   *string
+	store       *string
+	dsn         *string
+	embed       *string
+	embedDir    *string
+	embedServer *string
+	device      *string
 }
 
 func envOr(key, def string) string {
@@ -126,11 +129,12 @@ func envOr(key, def string) string {
 
 func storeFlags(fs *flag.FlagSet) storeFlagsT {
 	return storeFlagsT{
-		store:    fs.String("store", envOr("CODEPILOT_STORE", "sqlite"), "хранилище индекса: sqlite|pg"),
-		dsn:      fs.String("pg-dsn", envOr("CODEPILOT_PG_DSN", "postgres://codepilot:codepilot@localhost:5432/codepilot?sslmode=disable"), "DSN Postgres (режим pg)"),
-		embed:    fs.String("embed", envOr("CODEPILOT_EMBED", ""), `эмбеддер: onnx|"" (по умолчанию без эмбеддингов)`),
-		embedDir: fs.String("embed-dir", "models/e5-small", "каталог ONNX-модели эмбеддингов"),
-		device:   fs.String("device", envOr("CODEPILOT_DEVICE", "cpu"), "устройство инференса ONNX: cpu|coreml|cuda"),
+		store:       fs.String("store", envOr("CODEPILOT_STORE", "sqlite"), "хранилище индекса: sqlite|pg"),
+		dsn:         fs.String("pg-dsn", envOr("CODEPILOT_PG_DSN", "postgres://codepilot:codepilot@localhost:5432/codepilot?sslmode=disable"), "DSN Postgres (режим pg)"),
+		embed:       fs.String("embed", envOr("CODEPILOT_EMBED", ""), `эмбеддер: onnx|"" (по умолчанию без эмбеддингов)`),
+		embedDir:    fs.String("embed-dir", "models/e5-small", "каталог ONNX-модели эмбеддингов"),
+		embedServer: fs.String("embed-server", envOr("CODEPILOT_EMBED_SERVER", ""), "URL MLX-сайдкара эмбеддингов (напр. http://127.0.0.1:8081); заменяет --embed onnx"),
+		device:      fs.String("device", envOr("CODEPILOT_DEVICE", "cpu"), "устройство инференса ONNX: cpu|coreml|cuda"),
 	}
 }
 
@@ -150,9 +154,10 @@ func mustProviders(sf storeFlagsT) []string {
 }
 
 // loadIndexStore открывает индекс проекта из выбранного хранилища.
-// В режиме pg подключает эмбеддер (если embedKind == "onnx") и возвращает
-// cleanup для освобождения ресурсов. providers — execution providers ONNX.
-func loadIndexStore(project, store, dsn, embedKind, embedDir string, providers []string) (*index.Index, func(), error) {
+// В режиме pg подключает эмбеддер (MLX-сайдкар по embedServer, иначе локальный
+// ONNX при embedKind == "onnx") и возвращает cleanup для освобождения ресурсов.
+// providers — execution providers ONNX.
+func loadIndexStore(project, store, dsn, embedKind, embedDir, embedServer string, providers []string) (*index.Index, func(), error) {
 	abs, err := filepath.Abs(project)
 	if err != nil {
 		return nil, nil, err
@@ -177,7 +182,11 @@ func loadIndexStore(project, store, dsn, embedKind, embedDir string, providers [
 			return nil, nil, err
 		}
 		ix.PG = pg
-		if embedKind == "onnx" {
+		if embedServer != "" {
+			emb := embed.NewRemoteEmbedder(embedServer)
+			ix.Emb = emb
+			cleanup = func() { emb.Close(); pg.Close() }
+		} else if embedKind == "onnx" {
 			emb, err := embed.Load(embedDir, providers...)
 			if err != nil {
 				cleanup()
@@ -218,18 +227,31 @@ func cmdIndex(args []string) error {
 		fmt.Printf("%s: файлов %d, чанков %d (переиндексировано %d, без изменений %d, удалено %d)\n",
 			ix.ProjectRoot, st.Files, st.Chunks, st.Reindexed, st.Kept, st.Removed)
 	case "pg":
-		if *sf.embed != "onnx" {
-			return fmt.Errorf("--store pg требует --embed onnx (векторы e5); без эмбеддингов используйте --store sqlite")
+		var emb index.PassageEmbedder
+		var skipped func() int
+		if *sf.embedServer != "" {
+			r := embed.NewRemoteEmbedder(*sf.embedServer)
+			if err := r.CheckDim(); err != nil {
+				return err
+			}
+			emb = r
+			defer r.Close()
+		} else {
+			if *sf.embed != "onnx" {
+				return fmt.Errorf("--store pg требует --embed onnx или --embed-server URL (векторы e5); без эмбеддингов используйте --store sqlite")
+			}
+			providers, err := sf.providers()
+			if err != nil {
+				return err
+			}
+			e, err := embed.Load(*sf.embedDir, providers...)
+			if err != nil {
+				return err
+			}
+			defer e.Close()
+			emb = e
+			skipped = e.Skipped
 		}
-		providers, err := sf.providers()
-		if err != nil {
-			return err
-		}
-		emb, err := embed.Load(*sf.embedDir, providers...)
-		if err != nil {
-			return err
-		}
-		defer emb.Close()
 		pg, err := index.OpenPG(*sf.dsn)
 		if err != nil {
 			return err
@@ -241,8 +263,10 @@ func cmdIndex(args []string) error {
 		}
 		fmt.Printf("%s (pg): файлов %d, чанков %d (переиндексировано %d, без изменений %d, удалено %d), векторов пересчитано %d\n",
 			ix.ProjectRoot, st.Files, st.Chunks, st.Reindexed, st.Kept, st.Removed, embedded)
-		if n := emb.Skipped(); n > 0 {
-			fmt.Printf("внимание: %d чанков получили нулевой вектор (паника токенизатора, см. stderr)\n", n)
+		if skipped != nil {
+			if n := skipped(); n > 0 {
+				fmt.Printf("внимание: %d чанков получили нулевой вектор (паника токенизатора, см. stderr)\n", n)
+			}
 		}
 	default:
 		return fmt.Errorf("неизвестное хранилище %q (sqlite|pg)", *sf.store)
@@ -295,7 +319,7 @@ func cmdSearch(args []string) error {
 	if query == "" {
 		return fmt.Errorf("пустой запрос: codepilot search \"запрос\"")
 	}
-	ix, cleanup, err := loadIndexStore(*project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir, mustProviders(sf))
+	ix, cleanup, err := loadIndexStore(*project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir, *sf.embedServer, mustProviders(sf))
 	if err != nil {
 		return err
 	}
@@ -334,7 +358,7 @@ func cmdServe(args []string) error {
 	layaKind, layaDir := layaFlags(fs)
 	sf := storeFlags(fs)
 	_ = fs.Parse(args)
-	ix, cleanup, err := loadIndexStore(*project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir, mustProviders(sf))
+	ix, cleanup, err := loadIndexStore(*project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir, *sf.embedServer, mustProviders(sf))
 	if err != nil {
 		return err
 	}
@@ -363,15 +387,16 @@ func cmdWeb(args []string) error {
 		return err
 	}
 	return web.Serve(*addr, web.Options{
-		Store:    *sf.store,
-		PGDSN:    *sf.dsn,
-		Embed:    *sf.embed,
-		EmbedDir: *sf.embedDir,
-		Laya:     *layaKind,
-		LayaDir:  *layaDir,
-		Device:   *sf.device,
-		LogPath:  *logPath,
-		BinPath:  bin,
+		Store:       *sf.store,
+		PGDSN:       *sf.dsn,
+		Embed:       *sf.embed,
+		EmbedDir:    *sf.embedDir,
+		EmbedServer: *sf.embedServer,
+		Laya:        *layaKind,
+		LayaDir:     *layaDir,
+		Device:      *sf.device,
+		LogPath:     *logPath,
+		BinPath:     bin,
 	})
 }
 
@@ -431,7 +456,7 @@ func cmdBench(args []string) error {
 
 // setupRun — общая подготовка eval/bench: индекс, датасет, слой решений.
 func setupRun(project, dataset, layaKind, layaDir string, sf storeFlagsT) (*index.Index, *eval.Dataset, laya.Scorer, func(), error) {
-	ix, cleanup, err := loadIndexStore(project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir, mustProviders(sf))
+	ix, cleanup, err := loadIndexStore(project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir, *sf.embedServer, mustProviders(sf))
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}

@@ -28,15 +28,16 @@ var indexHTML []byte
 
 // Options — настройки веб-панели (флаги хранилища совпадают с CLI).
 type Options struct {
-	Store    string // sqlite|pg
-	PGDSN    string // DSN Postgres (режим pg)
-	Embed    string // onnx|""
-	EmbedDir string // каталог ONNX-модели эмбеддингов
-	Laya     string // heuristic|onnx (для MCP-сниппета)
-	LayaDir  string // каталог модели Laya (для MCP-сниппета)
-	Device   string // cpu|coreml|cuda
-	LogPath  string // путь к mcp-calls.jsonl
-	BinPath  string // путь к бинарю codepilot (для MCP-сниппета)
+	Store       string // sqlite|pg
+	PGDSN       string // DSN Postgres (режим pg)
+	Embed       string // onnx|""
+	EmbedDir    string // каталог ONNX-модели эмбеддингов
+	EmbedServer string // URL MLX-сайдкара (заменяет локальный ONNX)
+	Laya        string // heuristic|onnx (для MCP-сниппета)
+	LayaDir     string // каталог модели Laya (для MCP-сниппета)
+	Device      string // cpu|coreml|cuda
+	LogPath     string // путь к mcp-calls.jsonl
+	BinPath     string // путь к бинарю codepilot (для MCP-сниппета)
 }
 
 // project — элемент списка проектов.
@@ -351,7 +352,7 @@ func (s *server) runIndex(root, device string, j *indexJob) {
 	// Снапшот настроек хранилища: Device может меняться параллельно
 	// через POST /api/index, остальные поля неизменны после старта.
 	s.mu.Lock()
-	store, embedKind, embedDir, dsn := s.opts.Store, s.opts.Embed, s.opts.EmbedDir, s.opts.PGDSN
+	store, embedKind, embedDir, embedServer, dsn := s.opts.Store, s.opts.Embed, s.opts.EmbedDir, s.opts.EmbedServer, s.opts.PGDSN
 	s.mu.Unlock()
 	ix, st, err := index.Build(root)
 	if err != nil {
@@ -372,21 +373,33 @@ func (s *server) runIndex(root, device string, j *indexJob) {
 		j.Last = msg
 		j.mu.Unlock()
 	case "pg":
-		if embedKind != "onnx" {
-			finish(errors.New("--store pg требует --embed onnx"))
-			return
+		var emb index.PassageEmbedder
+		if embedServer != "" {
+			r := embed.NewRemoteEmbedder(embedServer)
+			if err := r.CheckDim(); err != nil {
+				finish(err)
+				return
+			}
+			emb = r
+			defer r.Close()
+		} else {
+			if embedKind != "onnx" {
+				finish(errors.New("--store pg требует --embed onnx или --embed-server URL"))
+				return
+			}
+			providers, err := embed.ProvidersForDevice(device)
+			if err != nil {
+				finish(err)
+				return
+			}
+			e, err := embed.Load(embedDir, providers...)
+			if err != nil {
+				finish(err)
+				return
+			}
+			defer e.Close()
+			emb = e
 		}
-		providers, err := embed.ProvidersForDevice(device)
-		if err != nil {
-			finish(err)
-			return
-		}
-		emb, err := embed.Load(embedDir, providers...)
-		if err != nil {
-			finish(err)
-			return
-		}
-		defer emb.Close()
 		pg, err := index.OpenPG(dsn)
 		if err != nil {
 			finish(err)
@@ -559,6 +572,9 @@ func (s *server) handleSnippet(w http.ResponseWriter, r *http.Request) {
 	}
 	if opts.Embed != "" {
 		args = append(args, "--embed", opts.Embed, "--embed-dir", opts.EmbedDir)
+	}
+	if opts.EmbedServer != "" {
+		args = append(args, "--embed-server", opts.EmbedServer)
 	}
 	if opts.Laya != "" && opts.Laya != "heuristic" {
 		args = append(args, "--laya", opts.Laya)

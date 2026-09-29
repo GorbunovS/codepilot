@@ -140,6 +140,25 @@ E3 = pg/e5-small):
 Замена TF-IDF на настоящие эмбеддинги подняла vec-режим с 0.75 до 0.92 по
 Recall@1 без всякой Laya; индексация sample_project — ~16 с, повторная — <1 с.
 
+## MLX-сайдкар (ускорение эмбеддингов ~100x на Apple Silicon)
+
+Локальный ONNX-пайплайн e5 выдаёт ~15 векторов/с на CPU; тот же контракт
+эмбеддингов через MLX (Apple GPU) — ~1500 текстов/с. Для этого в
+`tools/mlx-sidecar/` живёт Python-сервис (FastAPI/uvicorn на 127.0.0.1:8081,
+модель `mlx-community/multilingual-e5-small-mlx`), а Go ходит в него по HTTP
+(`--embed-server URL`, env `CODEPILOT_EMBED_SERVER`; заменяет `--embed onnx`):
+
+```bash
+tools/mlx-sidecar/run.sh   # venv в tools/mlx-sidecar/.venv, модель докачается при первом старте
+./codepilot index sample_project --store pg --embed-server http://127.0.0.1:8081
+./codepilot search "запрос" --project sample_project --store pg \
+    --embed-server http://127.0.0.1:8081 --mode vec
+```
+
+Векторы совместимы с ONNX-пайплайном (паритет cos ≈ 0.99), размерность
+сверяется при старте индексации. Только macOS на Apple Silicon; на остальных
+платформах — локальный ONNX (`--embed onnx`).
+
 ## Настоящая Laya (ONNX) вместо эвристики
 
 Модель `convaiinnovations/laya-multilingual` экспортирована в ONNX и лежит в

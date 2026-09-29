@@ -32,7 +32,7 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
 | `cmd/codepilot/main.go` | CLI (stdlib `flag`; `splitFlags` допускает флаги после позиционного запроса) |
 | `internal/chunk/` | чанкеры: `.go` (go/parser+ast), `.py`/`.js` (regex), `.vue` (SFC); fallback-окна 60/10 |
 | `internal/index/` | индекс: SQLite `index.db` (store.go) или Postgres+pgvector (pgstore.go), BM25 k1=1.5 b=0.75, TF-IDF, гибрид RRF k=60 (search.go), лексикон синонимов (lexicon.go) |
-| `internal/embed/` | bi-encoder эмбеддинги e5-small (ONNX): префиксы `query: `/`passage: `, mean pooling, L2-норма |
+| `internal/embed/` | bi-encoder эмбеддинги e5-small (ONNX): префиксы `query: `/`passage: `, mean pooling, L2-норма; `remote.go` — HTTP-клиент MLX-сайдкара (`RemoteEmbedder`, общий интерфейс `TextEmbedder`) |
 | `internal/ortlib/` | поиск нативной onnxruntime (.dll/.dylib/.so), env `CODEPILOT_ONNXRUNTIME_DLL` |
 | `internal/laya/` | слой решений: интерфейс `Scorer` (Score 0..5, Noul 0..1), эвристика (laya.go), ONNX-модель (onnx.go) |
 | `internal/mcp/` | MCP stdio-сервер: newline-delimited JSON-RPC 2.0, 4 инструмента, лог `mcp-calls.jsonl` |
@@ -46,6 +46,7 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
 | `Dockerfile`, `docker-compose.yml` | стенд: Postgres+pgvector (db) + CLI (app) |
 | `third_party/onnxruntime-purego` | vendored ONNX runtime (см. ниже) |
 | `tools/laya-export` | офлайн-экспорт/квантизация модели Laya (`requirements.txt` — torch 2.x + laya + onnxscript, Python ≥3.12) |
+| `tools/mlx-sidecar` | MLX-сайдкар эмбеддингов e5 (FastAPI на 127.0.0.1:8081, `run.sh` — venv + uvicorn); инференс на Apple GPU, ~100x к локальному ONNX; подключается флагом `--embed-server URL` (env `CODEPILOT_EMBED_SERVER`) |
 
 ## Инварианты и специфика (важно)
 
@@ -82,6 +83,12 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
   Контракт e5: префиксы `query: `/`passage: `, mean pooling, L2-норма — не менять
   без пересборки всех векторов. Интеграционный тест pgstore требует
   `CODEPILOT_PG_TEST_DSN`, без него скипается.
+- **`--embed-server URL`** (env `CODEPILOT_EMBED_SERVER`) — эмбеддинги e5 через
+  MLX-сайдкар (`tools/mlx-sidecar/run.sh`, только Apple Silicon) вместо локального
+  ONNX; `--embed onnx` тогда не нужен. Поле `Index.Emb` типизировано интерфейсом
+  `embed.TextEmbedder` (локальный `Embedder` и `RemoteEmbedder` взаимозаменяемы).
+  При старте индексации размерность сверяется с `embed.Dim` (384), векторы
+  совместимы с ONNX (паритет cos ≈ 0.99).
 - **`--device cpu|coreml|cuda`** (env `CODEPILOT_DEVICE`) — execution provider
   onnxruntime для e5 и Laya (`embed.ProvidersForDevice`, `embed.SessionOptions`).
   CoreML не читает внешние веса `.onnx.data`: Laya под CoreML берёт
