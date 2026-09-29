@@ -1,14 +1,14 @@
 # Собранный бинарь
-codepilot.exe
-codepilot
+/codepilot.exe
+/codepilot
 
 # Нативный рантайм и модели (скачиваются/генерируются отдельно, см. README)
 bin/
 models/
 
 # Генерируемые индексы и логи
-sample_project/index.db*
-sample_project/index.json
+index.db*
+index.json
 mcp-calls.jsonl
 
 # Python-окружение офлайн-инструментов
