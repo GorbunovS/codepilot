@@ -24,7 +24,7 @@ go build -o codepilot ./cmd/codepilot
 
 | команда | что делает |
 |---|---|
-| `index [path]` | Полная/инкрементальная индексация. Manifest (file→sha256) в `<path>/index.json`; пересчитываются только изменённые файлы. |
+| `index [path]` | Полная/инкрементальная индексация. Manifest (file→sha256) и чанки в SQLite-файле `<path>/index.db` (pure-Go драйвер, внешний сервер не нужен); пересчитываются только изменённые файлы. Легаси `index.json` подхватывается и мигрирует при первом запуске. |
 | `search "запрос"` | Отладочный поиск. Режимы: `fts` (BM25), `vec` (TF-IDF cosine), `hybrid` (RRF k=60), `hybrid+rerank` (порядок задаёт Laya), `hybrid+blend` (0.5·Laya + 0.5·RRF). |
 | `serve` | MCP-сервер по stdio (newline-delimited JSON-RPC 2.0). Инструменты: `search_code`, `get_symbol`, `find_references`, `read_span`. Вызовы логируются в `mcp-calls.jsonl`. |
 | `eval` | Прогон 12 вопросов датасета через конфигурации A=fts, B=vec, C=hybrid, D=hybrid+rerank, E=hybrid+blend. Recall@1/3/5, MRR, срезы по языку кода и вопроса, отчёт в `eval/report.md`. |
@@ -35,7 +35,7 @@ go build -o codepilot ./cmd/codepilot
 ```
 cmd/codepilot/main.go   CLI
 internal/chunk/         чанкеры (.go — go/parser+ast; .py/.js — regex; .vue — SFC; fallback — окна 60/10)
-internal/index/         индекс (JSON + manifest), BM25 (k1=1.5, b=0.75), TF-IDF, гибрид RRF (k=60)
+internal/index/         индекс (SQLite index.db + manifest), BM25 (k1=1.5, b=0.75), TF-IDF, гибрид RRF (k=60)
 internal/laya/          слой решений: интерфейс Scorer (Score 0..5, Noul 0..1) + эвристика
 internal/mcp/           минимальный MCP stdio-сервер
 internal/eval/          метрики по золотому датасету
@@ -47,7 +47,7 @@ internal/bench/         сравнение токенов baseline vs RAG
 | Компонент (ТЗ) | В прототипе | В проде |
 |---|---|---|
 | tree-sitter чанкинг | go/parser+go/ast для Go, regex для Python/JS/Vue, fallback-окна | tree-sitter для всех языков |
-| Postgres + pgvector | JSON-файл `index.json` + in-memory BM25/TF-IDF | Postgres + pgvector |
+| Postgres + pgvector | SQLite `index.db` (pure-Go `modernc.org/sqlite`) + in-memory BM25/TF-IDF | Postgres + pgvector для больших репо |
 | ONNX Laya (convaiinnovations/laya-multilingual) | **есть**: ONNX-инференс в Go (`--laya onnx`), эвристика как fallback | + файнтюн на теневых логах, int8, GPU EP |
 | mcp-go | свой минимальный MCP stdio (JSON-RPC по строкам) | официальный SDK mcp-go |
 | LSP (определения/референсы) | индексные символы + word-boundary grep без строк/комментариев | LSP-серверы |

@@ -1,9 +1,8 @@
-// Package index хранит индекс чанков (JSON-файл + manifest хешей),
-// строит BM25/TF-IDF модели и реализует гибридный поиск.
+// Package index хранит индекс чанков (SQLite-файл index.db; легаси index.json
+// читается и мигрирует), строит BM25/TF-IDF модели и реализует гибридный поиск.
 package index
 
 import (
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"math"
@@ -16,7 +15,7 @@ import (
 )
 
 // DefaultIndexName — имя файла индекса в корне проекта.
-const DefaultIndexName = "index.json"
+const DefaultIndexName = "index.db"
 
 // Index — сериализуемое состояние + построенные в памяти модели поиска.
 type Index struct {
@@ -91,13 +90,10 @@ func Build(root string) (*Index, Stats, error) {
 	}
 	ix := &Index{ProjectRoot: abs, Manifest: map[string]string{}, ChunkerVersion: chunk.Version}
 	old := map[string][]chunk.Chunk{}
-	if data, err := os.ReadFile(IndexPath(abs)); err == nil {
-		var prev Index
-		if json.Unmarshal(data, &prev) == nil && prev.ChunkerVersion == chunk.Version {
-			// версия чанкера сошлась — можно переиспользовать неизменённые файлы
-			for _, c := range prev.Chunks {
-				old[c.FilePath] = append(old[c.FilePath], c)
-			}
+	if prev, err := loadPrev(IndexPath(abs)); err == nil && prev.ChunkerVersion == chunk.Version {
+		// версия чанкера сошлась — можно переиспользовать неизменённые файлы
+		for _, c := range prev.Chunks {
+			old[c.FilePath] = append(old[c.FilePath], c)
 		}
 	}
 	var st Stats
@@ -140,30 +136,31 @@ func Build(root string) (*Index, Stats, error) {
 	return ix, st, nil
 }
 
-// Save записывает индекс в <project_root>/index.json.
+// Save записывает индекс в <project_root>/index.db (SQLite).
 func (ix *Index) Save() error {
-	data, err := json.MarshalIndent(ix, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(IndexPath(ix.ProjectRoot), data, 0644)
+	return ix.saveStore(IndexPath(ix.ProjectRoot))
 }
 
-// Load читает индекс из JSON-файла и перестраивает модели поиска.
+// Load читает индекс и перестраивает модели поиска. Формат определяется
+// по расширению пути: .json — легаси-формат, иначе SQLite.
 func Load(path string) (*Index, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+	if isJSONPath(path) {
+		return loadJSON(path)
 	}
-	var ix Index
-	if err := json.Unmarshal(data, &ix); err != nil {
-		return nil, err
+	return loadStore(path)
+}
+
+// loadPrev загружает предыдущее состояние индекса для инкрементальной
+// индексации: сначала SQLite, при его отсутствии — легаси index.json рядом
+// (после первого Save старый файл можно удалить).
+func loadPrev(dbPath string) (*Index, error) {
+	if exists(dbPath) {
+		return loadStore(dbPath)
 	}
-	if ix.Manifest == nil {
-		ix.Manifest = map[string]string{}
+	if jp := legacyJSONPath(dbPath); exists(jp) {
+		return loadJSON(jp)
 	}
-	ix.buildModel()
-	return &ix, nil
+	return nil, fmt.Errorf("no previous index at %s", dbPath)
 }
 
 // buildModel строит BM25-статистики и TF-IDF векторы по корпусу чанков.
