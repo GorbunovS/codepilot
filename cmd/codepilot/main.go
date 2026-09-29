@@ -79,6 +79,9 @@ func usage() {
   --pg-dsn, --embed onnx [--embed-dir models/e5-small]).
   Переменные: CODEPILOT_STORE, CODEPILOT_PG_DSN, CODEPILOT_EMBED.
 
+Устройство инференса: --device cpu (по умолчанию) | coreml | cuda
+  (CODEPILOT_DEVICE); если провайдера нет в сборке onnxruntime — fallback на CPU.
+
 Слой решений Laya: --laya heuristic (по умолчанию) | --laya onnx
   [--laya-dir models/laya-multilingual]; также читается CODEPILOT_LAYA.
 Режимы поиска: fts (BM25), vec (TF-IDF cosine; в pg-режиме — e5+pgvector),
@@ -94,8 +97,8 @@ func layaFlags(fs *flag.FlagSet) (kind, dir *string) {
 	return kind, dir
 }
 
-func resolveScorer(kind, dir string) laya.Scorer {
-	return laya.Resolve(kind, dir)
+func resolveScorer(kind, dir string, providers []string) laya.Scorer {
+	return laya.Resolve(kind, dir, providers...)
 }
 
 // closeScorer освобождает ресурсы ONNX-модели (у эвристики их нет).
@@ -111,6 +114,7 @@ type storeFlagsT struct {
 	dsn      *string
 	embed    *string
 	embedDir *string
+	device   *string
 }
 
 func envOr(key, def string) string {
@@ -126,13 +130,29 @@ func storeFlags(fs *flag.FlagSet) storeFlagsT {
 		dsn:      fs.String("pg-dsn", envOr("CODEPILOT_PG_DSN", "postgres://codepilot:codepilot@localhost:5432/codepilot?sslmode=disable"), "DSN Postgres (режим pg)"),
 		embed:    fs.String("embed", envOr("CODEPILOT_EMBED", ""), `эмбеддер: onnx|"" (по умолчанию без эмбеддингов)`),
 		embedDir: fs.String("embed-dir", "models/e5-small", "каталог ONNX-модели эмбеддингов"),
+		device:   fs.String("device", envOr("CODEPILOT_DEVICE", "cpu"), "устройство инференса ONNX: cpu|coreml|cuda"),
 	}
+}
+
+// providers мапит --device в execution providers onnxruntime.
+func (sf storeFlagsT) providers() ([]string, error) {
+	return embed.ProvidersForDevice(*sf.device)
+}
+
+// mustProviders — то же, но с завершением процесса при невалидном --device.
+func mustProviders(sf storeFlagsT) []string {
+	p, err := sf.providers()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(2)
+	}
+	return p
 }
 
 // loadIndexStore открывает индекс проекта из выбранного хранилища.
 // В режиме pg подключает эмбеддер (если embedKind == "onnx") и возвращает
-// cleanup для освобождения ресурсов.
-func loadIndexStore(project, store, dsn, embedKind, embedDir string) (*index.Index, func(), error) {
+// cleanup для освобождения ресурсов. providers — execution providers ONNX.
+func loadIndexStore(project, store, dsn, embedKind, embedDir string, providers []string) (*index.Index, func(), error) {
 	abs, err := filepath.Abs(project)
 	if err != nil {
 		return nil, nil, err
@@ -158,7 +178,7 @@ func loadIndexStore(project, store, dsn, embedKind, embedDir string) (*index.Ind
 		}
 		ix.PG = pg
 		if embedKind == "onnx" {
-			emb, err := embed.Load(embedDir)
+			emb, err := embed.Load(embedDir, providers...)
 			if err != nil {
 				cleanup()
 				return nil, nil, err
@@ -201,7 +221,11 @@ func cmdIndex(args []string) error {
 		if *sf.embed != "onnx" {
 			return fmt.Errorf("--store pg требует --embed onnx (векторы e5); без эмбеддингов используйте --store sqlite")
 		}
-		emb, err := embed.Load(*sf.embedDir)
+		providers, err := sf.providers()
+		if err != nil {
+			return err
+		}
+		emb, err := embed.Load(*sf.embedDir, providers...)
 		if err != nil {
 			return err
 		}
@@ -271,12 +295,12 @@ func cmdSearch(args []string) error {
 	if query == "" {
 		return fmt.Errorf("пустой запрос: codepilot search \"запрос\"")
 	}
-	ix, cleanup, err := loadIndexStore(*project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir)
+	ix, cleanup, err := loadIndexStore(*project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir, mustProviders(sf))
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	scorer := resolveScorer(*layaKind, *layaDir)
+	scorer := resolveScorer(*layaKind, *layaDir, mustProviders(sf))
 	defer closeScorer(scorer)
 	hits, err := ix.Search(query, *mode, *top, scorer)
 	if err != nil {
@@ -310,12 +334,12 @@ func cmdServe(args []string) error {
 	layaKind, layaDir := layaFlags(fs)
 	sf := storeFlags(fs)
 	_ = fs.Parse(args)
-	ix, cleanup, err := loadIndexStore(*project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir)
+	ix, cleanup, err := loadIndexStore(*project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir, mustProviders(sf))
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	scorer := resolveScorer(*layaKind, *layaDir)
+	scorer := resolveScorer(*layaKind, *layaDir, mustProviders(sf))
 	defer closeScorer(scorer)
 	// stdout — канал протокола MCP, всё служебное только в stderr.
 	fmt.Fprintf(os.Stderr, "codepilot serve: проект %s, чанков %d; слушаю stdio\n", ix.ProjectRoot, len(ix.Chunks))
@@ -345,6 +369,7 @@ func cmdWeb(args []string) error {
 		EmbedDir: *sf.embedDir,
 		Laya:     *layaKind,
 		LayaDir:  *layaDir,
+		Device:   *sf.device,
 		LogPath:  *logPath,
 		BinPath:  bin,
 	})
@@ -406,7 +431,7 @@ func cmdBench(args []string) error {
 
 // setupRun — общая подготовка eval/bench: индекс, датасет, слой решений.
 func setupRun(project, dataset, layaKind, layaDir string, sf storeFlagsT) (*index.Index, *eval.Dataset, laya.Scorer, func(), error) {
-	ix, cleanup, err := loadIndexStore(project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir)
+	ix, cleanup, err := loadIndexStore(project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir, mustProviders(sf))
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -415,5 +440,5 @@ func setupRun(project, dataset, layaKind, layaDir string, sf storeFlagsT) (*inde
 		cleanup()
 		return nil, nil, nil, nil, err
 	}
-	return ix, ds, resolveScorer(layaKind, layaDir), cleanup, nil
+	return ix, ds, resolveScorer(layaKind, layaDir, mustProviders(sf)), cleanup, nil
 }

@@ -94,6 +94,12 @@ func (s *PGStore) Close() { s.pool.Close() }
 // embedBatch — размер батча при прогоне чанков через эмбеддер.
 const embedBatch = 32
 
+// saveCommitBatch — сколько чанков пишется в одной транзакции. Порционные
+// коммиты делают индексацию перезапускаемой: при обрыве (таймаут, сон
+// машины) уже записанные вектора не теряются, следующий запуск пересчитает
+// только чанки без вектора.
+const saveCommitBatch = 2048
+
 // Save записывает индекс проекта в Postgres. Эмбеддинги считаются только для
 // новых и изменённых чанков (по hash файла), остальные строки не трогаются.
 func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error) {
@@ -124,68 +130,86 @@ func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error)
 	}
 
 	var need []int // индексы чанков без актуального вектора
-	vectors := map[int][]float32{}
 	for i, c := range ix.Chunks {
 		ex, ok := existing[c.ID]
 		if !ok || ex.hash != c.Hash || (emb != nil && !ex.hasVec) {
 			need = append(need, i)
 		}
 	}
-	if emb != nil {
-		Logf("pg: векторов к пересчёту %d (батчи по %d)", len(need), embedBatch)
-		for off := 0; off < len(need); off += embedBatch {
-			end := off + embedBatch
-			if end > len(need) {
-				end = len(need)
-			}
-			texts := make([]string, 0, end-off)
-			for _, i := range need[off:end] {
-				texts = append(texts, passageText(ix.Chunks[i]))
-			}
-			vecs, err := emb.EmbedPassages(texts)
-			if err != nil {
-				return embedded, fmt.Errorf("pg: эмбеддинги: %w", err)
-			}
-			for j, i := range need[off:end] {
-				vectors[i] = vecs[j]
-			}
-			embedded += len(vecs)
-			if batch := off / embedBatch; batch%64 == 0 || end == len(need) {
-				Logf("pg: эмбеддинги %d/%d", end, len(need))
-			}
-		}
+	if emb != nil && len(need) > 0 {
+		Logf("pg: векторов к пересчёту %d (батчи по %d, коммит каждые %d)", len(need), embedBatch, saveCommitBatch)
 	}
 
-	inNeed := make(map[int]bool, len(need))
-	for _, i := range need {
-		inNeed[i] = true
+	upsert := `INSERT INTO chunks
+		(project, id, file_path, language, start_line, end_line,
+		 symbol_name, kind, signature, doc, content, hash, embedding)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		ON CONFLICT (project, id) DO UPDATE SET
+		file_path=$3, language=$4, start_line=$5, end_line=$6,
+		symbol_name=$7, kind=$8, signature=$9, doc=$10, content=$11,
+		hash=$12, embedding=$13`
+
+	for off := 0; off < len(need); off += saveCommitBatch {
+		end := off + saveCommitBatch
+		if end > len(need) {
+			end = len(need)
+		}
+		part := need[off:end]
+		vectors := map[int][]float32{}
+		if emb != nil {
+			for boff := 0; boff < len(part); boff += embedBatch {
+				bend := boff + embedBatch
+				if bend > len(part) {
+					bend = len(part)
+				}
+				texts := make([]string, 0, bend-boff)
+				for _, i := range part[boff:bend] {
+					texts = append(texts, passageText(ix.Chunks[i]))
+				}
+				vecs, err := emb.EmbedPassages(texts)
+				if err != nil {
+					return embedded, fmt.Errorf("pg: эмбеддинги: %w", err)
+				}
+				for j, i := range part[boff:bend] {
+					vectors[i] = vecs[j]
+				}
+				if b := boff / embedBatch; b%16 == 0 {
+					Logf("pg: эмбеддинги %d/%d", off+bend, len(need))
+				}
+			}
+		}
+		tx, err := s.pool.Begin(ctx)
+		if err != nil {
+			return embedded, err
+		}
+		for _, i := range part {
+			c := ix.Chunks[i]
+			var ev interface{}
+			if v, ok := vectors[i]; ok {
+				ev = pgvector.NewVector(v)
+			}
+			if _, err := tx.Exec(ctx, upsert,
+				project, c.ID, c.FilePath, c.Language, c.StartLine, c.EndLine,
+				c.SymbolName, c.Kind, c.Signature, c.Doc, c.Content, c.Hash, ev); err != nil {
+				tx.Rollback(ctx)
+				return embedded, err
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return embedded, err
+		}
+		if emb != nil {
+			embedded += len(part)
+		}
+		Logf("pg: сохранено %d/%d чанков", end, len(need))
 	}
+
+	// финальная транзакция: вычистить чанки удалённых файлов и записать мету
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return embedded, err
 	}
 	defer tx.Rollback(ctx)
-	for i, c := range ix.Chunks {
-		if !inNeed[i] {
-			continue // строка на месте, вектор актуален
-		}
-		var ev interface{}
-		if v, ok := vectors[i]; ok {
-			ev = pgvector.NewVector(v)
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO chunks
-			(project, id, file_path, language, start_line, end_line,
-			 symbol_name, kind, signature, doc, content, hash, embedding)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-			ON CONFLICT (project, id) DO UPDATE SET
-			file_path=$3, language=$4, start_line=$5, end_line=$6,
-			symbol_name=$7, kind=$8, signature=$9, doc=$10, content=$11,
-			hash=$12, embedding=$13`,
-			project, c.ID, c.FilePath, c.Language, c.StartLine, c.EndLine,
-			c.SymbolName, c.Kind, c.Signature, c.Doc, c.Content, c.Hash, ev); err != nil {
-			return embedded, err
-		}
-	}
 	// убрать чанки удалённых/переименованных файлов
 	ids := make([]string, len(ix.Chunks))
 	for i, c := range ix.Chunks {

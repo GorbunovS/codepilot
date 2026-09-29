@@ -77,9 +77,17 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
 - **pg-режим (`--store pg`).** Чанки и векторы e5 (384 dim) в Postgres+pgvector,
   ключ проекта — абсолютный путь корня (в Docker это `/work/...`, снаружи —
   хостовый путь: это разные ключи). Эмбеддинги пересчитываются по sha256 чанка.
+  Сохранение порционное (`saveCommitBatch = 2048` в pgstore.go) — обрыв не
+  теряет вектора, повторный запуск продолжает с места обрыва.
   Контракт e5: префиксы `query: `/`passage: `, mean pooling, L2-норма — не менять
   без пересборки всех векторов. Интеграционный тест pgstore требует
   `CODEPILOT_PG_TEST_DSN`, без него скипается.
+- **`--device cpu|coreml|cuda`** (env `CODEPILOT_DEVICE`) — execution provider
+  onnxruntime для e5 и Laya (`embed.ProvidersForDevice`, `embed.SessionOptions`).
+  CoreML не читает внешние веса `.onnx.data`: Laya под CoreML берёт
+  `laya.single.onnx` (склейка — `tools/laya-export/merge_external_data.py`).
+  Токенизатор e5/Laya может паниковать на экзотике юникода — panic ловится
+  в `embed.encodeSafe`, чанк получает нулевой вектор, счётчик — `Skipped()`.
 - Комментарии в коде и сообщения коммитов — на русском.
 
 ## Контракты, от которых зависят другие части

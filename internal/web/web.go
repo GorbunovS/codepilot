@@ -34,6 +34,7 @@ type Options struct {
 	EmbedDir string // каталог ONNX-модели эмбеддингов
 	Laya     string // heuristic|onnx (для MCP-сниппета)
 	LayaDir  string // каталог модели Laya (для MCP-сниппета)
+	Device   string // cpu|coreml|cuda
 	LogPath  string // путь к mcp-calls.jsonl
 	BinPath  string // путь к бинарю codepilot (для MCP-сниппета)
 }
@@ -317,7 +318,12 @@ func (s *server) runIndex(root string, j *indexJob) {
 			finish(errors.New("--store pg требует --embed onnx"))
 			return
 		}
-		emb, err := embed.Load(s.opts.EmbedDir)
+		providers, err := embed.ProvidersForDevice(s.opts.Device)
+		if err != nil {
+			finish(err)
+			return
+		}
+		emb, err := embed.Load(s.opts.EmbedDir, providers...)
 		if err != nil {
 			finish(err)
 			return
@@ -488,6 +494,9 @@ func (s *server) handleSnippet(w http.ResponseWriter, r *http.Request) {
 		if s.opts.LayaDir != "" {
 			args = append(args, "--laya-dir", s.opts.LayaDir)
 		}
+	}
+	if s.opts.Device != "" && s.opts.Device != "cpu" {
+		args = append(args, "--device", s.opts.Device)
 	}
 	snippet := map[string]any{
 		"mcpServers": map[string]any{

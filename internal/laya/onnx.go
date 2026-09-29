@@ -27,6 +27,7 @@ import (
 	"sync"
 
 	"codepilot/internal/chunk"
+	"codepilot/internal/embed"
 	"codepilot/internal/index"
 	"codepilot/internal/ortlib"
 
@@ -115,7 +116,8 @@ var _ index.Scorer = (*Model)(nil)
 // Load загружает модель из modelDir: tokenizer.json, laya.onnx, laya_config.json.
 // Нативная библиотека onnxruntime ищется через ortlib.Find
 // ($CODEPILOT_ONNXRUNTIME_DLL, modelDir, bin/, системные пути).
-func Load(modelDir string) (*Model, error) {
+// providers — желаемые execution providers (см. embed.ProvidersForDevice).
+func Load(modelDir string, providers ...string) (*Model, error) {
 	cfg, err := loadConfig(modelDir)
 	if err != nil {
 		return nil, err
@@ -125,6 +127,17 @@ func Load(modelDir string) (*Model, error) {
 		return nil, fmt.Errorf("laya: tokenizer.json не найден в %s: %w", modelDir, err)
 	}
 	onnxPath := filepath.Join(modelDir, "laya.onnx")
+	if len(providers) > 0 {
+		// CoreML EP не читает модели с внешними весами (.onnx.data) —
+		// переключаемся на склеенный вариант, если он есть
+		// (tools/laya-export/merge_external_data.py).
+		single := filepath.Join(modelDir, "laya.single.onnx")
+		if _, err := os.Stat(single); err == nil {
+			onnxPath = single
+		} else {
+			fmt.Fprintf(os.Stderr, "laya: для --device нужен однофайловый %s (склейка: tools/laya-export/merge_external_data.py); пробую %s\n", single, onnxPath)
+		}
+	}
 	if _, err := os.Stat(onnxPath); err != nil {
 		return nil, fmt.Errorf("laya: laya.onnx не найден в %s: %w", modelDir, err)
 	}
@@ -153,7 +166,7 @@ func Load(modelDir string) (*Model, error) {
 		return nil, fmt.Errorf("laya: ORT env: %w", err)
 	}
 	m.env = env
-	sess, err := rt.NewSession(env, onnxPath, nil)
+	sess, err := rt.NewSession(env, onnxPath, embed.SessionOptions(rt, providers))
 	if err != nil {
 		env.Close()
 		rt.Close()
@@ -687,7 +700,8 @@ func (m *Model) Noul(query string, top []index.SearchHit) float64 {
 // kind: "onnx" — нейросеть из modelDir, "heuristic"/"" — эвристика.
 // Пустой kind читается из CODEPILOT_LAYA. При любой ошибке загрузки ONNX —
 // предупреждение в stderr и graceful fallback на Heuristic.
-func Resolve(kind, modelDir string) Scorer {
+// providers — желаемые execution providers (см. embed.ProvidersForDevice).
+func Resolve(kind, modelDir string, providers ...string) Scorer {
 	if kind == "" {
 		kind = os.Getenv("CODEPILOT_LAYA")
 	}
@@ -701,7 +715,7 @@ func Resolve(kind, modelDir string) Scorer {
 	if modelDir == "" {
 		modelDir = "models/laya-multilingual"
 	}
-	m, err := Load(modelDir)
+	m, err := Load(modelDir, providers...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: laya onnx недоступна (%v); fallback на heuristic\n", err)
 		return Heuristic{}

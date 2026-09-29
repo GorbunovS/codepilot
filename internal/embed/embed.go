@@ -43,9 +43,26 @@ type Embedder struct {
 // Skipped — сколько текстов было заменено пустыми из-за паники токенизатора.
 func (e *Embedder) Skipped() int { return e.skipped }
 
+// ProvidersForDevice мапит --device (cpu|coreml|cuda) в имена провайдеров
+// onnxruntime. cpu и пустая строка — дефолт (CPUExecutionProvider).
+func ProvidersForDevice(device string) ([]string, error) {
+	switch device {
+	case "", "cpu":
+		return nil, nil
+	case "coreml":
+		return []string{"CoreMLExecutionProvider"}, nil
+	case "cuda":
+		return []string{"CUDAExecutionProvider"}, nil
+	default:
+		return nil, fmt.Errorf("неизвестное устройство %q (cpu|coreml|cuda)", device)
+	}
+}
+
 // Load загружает модель из dir: tokenizer.json + model.onnx.
 // Нативная библиотека onnxruntime ищется через ortlib.Find(dir).
-func Load(dir string) (*Embedder, error) {
+// providers — желаемые execution providers (напр. CoreMLExecutionProvider);
+// если запрошенного нет в сборке onnxruntime — предупреждение в stderr и CPU.
+func Load(dir string, providers ...string) (*Embedder, error) {
 	tokPath := filepath.Join(dir, "tokenizer.json")
 	if _, err := os.Stat(tokPath); err != nil {
 		return nil, fmt.Errorf("embed: tokenizer.json не найден в %s: %w", dir, err)
@@ -71,13 +88,42 @@ func Load(dir string) (*Embedder, error) {
 		rt.Close()
 		return nil, fmt.Errorf("embed: ORT env: %w", err)
 	}
-	sess, err := rt.NewSession(env, onnxPath, nil)
+	sess, err := rt.NewSession(env, onnxPath, SessionOptions(rt, providers))
 	if err != nil {
 		env.Close()
 		rt.Close()
 		return nil, fmt.Errorf("embed: сессия ONNX %s: %w", onnxPath, err)
 	}
 	return &Embedder{rt: rt, env: env, session: sess, tok: tk}, nil
+}
+
+// SessionOptions собирает ort.SessionOptions под запрошенные провайдеры.
+// Если провайдера нет в сборке onnxruntime — предупреждение и fallback на CPU
+// (onnxruntime сам докинет CPUExecutionProvider в конец списка).
+func SessionOptions(rt *ort.Runtime, providers []string) *ort.SessionOptions {
+	if len(providers) == 0 {
+		return nil
+	}
+	avail, err := rt.GetAvailableProviders()
+	if err == nil {
+		set := map[string]bool{}
+		for _, p := range avail {
+			set[p] = true
+		}
+		filtered := providers[:0]
+		for _, p := range providers {
+			if set[p] {
+				filtered = append(filtered, p)
+			} else {
+				fmt.Fprintf(os.Stderr, "ort: провайдер %s недоступен в этой сборке onnxruntime (есть: %v), использую CPU\n", p, avail)
+			}
+		}
+		providers = filtered
+	}
+	if len(providers) == 0 {
+		return nil
+	}
+	return &ort.SessionOptions{ExecutionProviders: providers}
 }
 
 // Close освобождает сессию, окружение и runtime.

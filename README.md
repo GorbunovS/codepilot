@@ -103,6 +103,28 @@ docker compose run --rm -T app serve --project sample_project   # MCP по stdio
 Переменные окружения: `CODEPILOT_STORE`, `CODEPILOT_PG_DSN`, `CODEPILOT_EMBED`.
 Эмбеддинги пересчитываются только для изменённых чанков (по sha256 файла);
 в sqlite-режиме всё работает как раньше, векторного поиска там нет.
+Сохранение в pg идёт порционными транзакциями (по 2048 чанков): обрыв
+индексации не теряет уже посчитанные векторы — повторный запуск продолжит
+с места обрыва.
+
+## Устройство инференса: --device cpu|coreml|cuda
+
+Флаг `--device` (env `CODEPILOT_DEVICE`) выбирает execution provider
+onnxruntime для e5 и Laya. На Apple Silicon доступен `coreml` (GPU/ANE):
+e5-small работает на CoreML из коробки (448/623 узлов графа), Laya — только
+после склейки в однофайловую модель (CoreML не читает внешние веса
+`.onnx.data`):
+
+```bash
+tools/laya-export/.venv/bin/python tools/laya-export/merge_external_data.py models/laya-multilingual
+./codepilot index <проект> --store pg --embed onnx --device coreml
+```
+
+Если запрошенного провайдера нет в сборке onnxruntime — предупреждение в
+stderr и fallback на CPU. Замеры на M-серии: для e5 CoreML даёт выигрыш на
+больших прогонах; для Laya zero-shot реранка компиляция CoreML-партиций на
+старте (~7 мин на 252 партиции) съедает выгоду при коротких сессиях —
+Laya разумно держать на CPU.
 
 Результаты на том же датасете (12 вопросов, эвристика; E0 = sqlite/TF-IDF,
 E3 = pg/e5-small):
