@@ -3,6 +3,7 @@
 package index
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"math"
@@ -92,6 +93,15 @@ func SourceFiles(root string) ([]string, error) {
 // Не потокобезопасно: подменять до запуска индексации.
 var Logf = func(format string, args ...any) {}
 
+// CheckAbort — необязательный хук отмены индексации: если не nil и вернул
+// true, Build/PGStore.Save прерываются с ErrAborted. nil — не отменять.
+// Не потокобезопасно: подменять до запуска индексации (веб-панель
+// сериализует индексацию глобальным гейтом).
+var CheckAbort func() bool
+
+// ErrAborted — индексация прервана пользователем (через CheckAbort).
+var ErrAborted = errors.New("индексация отменена")
+
 // Build выполняет полную или инкрементальную индексацию: по manifest
 // переиндексируются только изменённые/новые файлы, удалённые выбрасываются.
 // Файл индекса читается, но не сохраняется (для этого — Save).
@@ -116,6 +126,9 @@ func Build(root string) (*Index, Stats, error) {
 	Logf("index: %s: файлов к обходу %d", abs, len(files))
 	seen := map[string]bool{}
 	for _, rel := range files {
+		if CheckAbort != nil && st.Files%200 == 0 && CheckAbort() {
+			return nil, st, ErrAborted
+		}
 		src, err := os.ReadFile(filepath.Join(abs, filepath.FromSlash(rel)))
 		if err != nil {
 			return nil, st, err

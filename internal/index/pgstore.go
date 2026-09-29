@@ -150,6 +150,10 @@ func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error)
 		hash=$12, embedding=$13`
 
 	for off := 0; off < len(need); off += saveCommitBatch {
+		// Отмена между порционными коммитами: записанное не теряется.
+		if CheckAbort != nil && CheckAbort() {
+			return embedded, ErrAborted
+		}
 		end := off + saveCommitBatch
 		if end > len(need) {
 			end = len(need)

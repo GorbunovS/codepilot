@@ -49,8 +49,9 @@ type project struct {
 type indexJob struct {
 	mu      sync.Mutex
 	log     []string // ring-buffer последних строк
-	Last    string   // итог последнего прогона (ok/error + сообщение)
+	Last    string   // итог последнего прогона (ok/error/aborted + сообщение)
 	Running bool
+	Cancel  bool // запрошена отмена текущего прогона
 }
 
 const maxLogLines = 500
@@ -109,6 +110,7 @@ func Serve(addr string, opts Options) error {
 	mux.HandleFunc("DELETE /api/projects", s.handleDelProject)
 	mux.HandleFunc("GET /api/ls", s.handleLs)
 	mux.HandleFunc("POST /api/index", s.handleIndex)
+	mux.HandleFunc("POST /api/index/cancel", s.handleCancelIndex)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/mcp-snippet", s.handleSnippet)
@@ -239,7 +241,53 @@ func (s *server) job(path string) *indexJob {
 }
 
 // handleIndex запускает индексацию проекта в горутине.
+// Необязательное поле device (cpu|coreml|cuda) запоминается в настройках
+// панели и используется для этого прогона (и попадёт в MCP-сниппет).
 func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path   string `json:"path"`
+		Device string `json:"device"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Path) == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("нужен JSON {\"path\": \"...\"}"))
+		return
+	}
+	abs, err := filepath.Abs(strings.TrimSpace(req.Path))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if _, err := embed.ProvidersForDevice(req.Device); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	// Глобальный гейт: index.Logf/CheckAbort — хуки на весь пакет, поэтому
+	// одновременно индексируется максимум один проект.
+	s.mu.Lock()
+	if s.indexing {
+		s.mu.Unlock()
+		writeErr(w, http.StatusConflict, errors.New("индексация уже идёт"))
+		return
+	}
+	s.indexing = true
+	if req.Device != "" {
+		s.opts.Device = req.Device
+	}
+	device := s.opts.Device
+	s.mu.Unlock()
+	j := s.job(abs)
+	j.mu.Lock()
+	j.Running = true
+	j.Cancel = false
+	j.log = nil
+	j.Last = ""
+	j.mu.Unlock()
+	go s.runIndex(abs, device, j)
+	writeJSON(w, http.StatusAccepted, map[string]any{"indexing": true})
+}
+
+// handleCancelIndex запрашивает отмену текущей индексации проекта.
+func (s *server) handleCancelIndex(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path string `json:"path"`
 	}
@@ -252,29 +300,23 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	// Глобальный гейт: index.Logf — хук на весь пакет, поэтому одновременно
-	// индексируется максимум один проект.
-	s.mu.Lock()
-	if s.indexing {
-		s.mu.Unlock()
-		writeErr(w, http.StatusConflict, errors.New("индексация уже идёт"))
-		return
-	}
-	s.indexing = true
-	s.mu.Unlock()
 	j := s.job(abs)
 	j.mu.Lock()
-	j.Running = true
-	j.log = nil
-	j.Last = ""
+	if !j.Running {
+		j.mu.Unlock()
+		writeErr(w, http.StatusConflict, errors.New("индексация этого проекта не идёт"))
+		return
+	}
+	j.Cancel = true
 	j.mu.Unlock()
-	go s.runIndex(abs, j)
-	writeJSON(w, http.StatusAccepted, map[string]any{"indexing": true})
+	j.append("отмена запрошена пользователем…")
+	writeJSON(w, http.StatusAccepted, map[string]any{"cancelling": true})
 }
 
 // runIndex — фоновая индексация; прогресс пишется в ring-buffer задачи
-// через глобальный хук index.Logf (восстанавливается по завершении).
-func (s *server) runIndex(root string, j *indexJob) {
+// через глобальный хук index.Logf, отмена — через index.CheckAbort
+// (оба хука восстанавливаются по завершении).
+func (s *server) runIndex(root, device string, j *indexJob) {
 	defer func() {
 		j.mu.Lock()
 		j.Running = false
@@ -286,22 +328,38 @@ func (s *server) runIndex(root string, j *indexJob) {
 	finish := func(err error) {
 		j.mu.Lock()
 		if err != nil {
-			j.Last = "error: " + err.Error()
+			if errors.Is(err, index.ErrAborted) {
+				j.Last = "aborted: отменено пользователем"
+			} else {
+				j.Last = "error: " + err.Error()
+			}
 		}
 		j.mu.Unlock()
 	}
 
-	prev := index.Logf
+	prevLog := index.Logf
 	index.Logf = func(format string, args ...any) { j.append(fmt.Sprintf(format, args...)) }
-	defer func() { index.Logf = prev }()
+	prevAbort := index.CheckAbort
+	index.CheckAbort = func() bool {
+		j.mu.Lock()
+		defer j.mu.Unlock()
+		return j.Cancel
+	}
+	defer func() { index.Logf = prevLog; index.CheckAbort = prevAbort }()
 
 	j.append("индексация " + root)
+	// Снапшот настроек хранилища: Device может меняться параллельно
+	// через POST /api/index, остальные поля неизменны после старта.
+	s.mu.Lock()
+	store, embedKind, embedDir, dsn := s.opts.Store, s.opts.Embed, s.opts.EmbedDir, s.opts.PGDSN
+	s.mu.Unlock()
 	ix, st, err := index.Build(root)
 	if err != nil {
+		j.append("прервано: " + err.Error())
 		finish(err)
 		return
 	}
-	switch s.opts.Store {
+	switch store {
 	case "sqlite", "":
 		if err := ix.Save(); err != nil {
 			finish(fmt.Errorf("сохранение индекса: %w", err))
@@ -314,22 +372,22 @@ func (s *server) runIndex(root string, j *indexJob) {
 		j.Last = msg
 		j.mu.Unlock()
 	case "pg":
-		if s.opts.Embed != "onnx" {
+		if embedKind != "onnx" {
 			finish(errors.New("--store pg требует --embed onnx"))
 			return
 		}
-		providers, err := embed.ProvidersForDevice(s.opts.Device)
+		providers, err := embed.ProvidersForDevice(device)
 		if err != nil {
 			finish(err)
 			return
 		}
-		emb, err := embed.Load(s.opts.EmbedDir, providers...)
+		emb, err := embed.Load(embedDir, providers...)
 		if err != nil {
 			finish(err)
 			return
 		}
 		defer emb.Close()
-		pg, err := index.OpenPG(s.opts.PGDSN)
+		pg, err := index.OpenPG(dsn)
 		if err != nil {
 			finish(err)
 			return
@@ -347,7 +405,7 @@ func (s *server) runIndex(root string, j *indexJob) {
 		j.Last = msg
 		j.mu.Unlock()
 	default:
-		finish(fmt.Errorf("неизвестное хранилище %q (sqlite|pg)", s.opts.Store))
+		finish(fmt.Errorf("неизвестное хранилище %q (sqlite|pg)", store))
 	}
 }
 
@@ -355,10 +413,17 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	j := s.job(path)
 	running, log, last := j.snapshot()
+	s.mu.Lock()
+	device := s.opts.Device
+	s.mu.Unlock()
+	if device == "" {
+		device = "cpu"
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"indexing":    running,
 		"log":         log,
 		"last_result": last,
+		"device":      device,
 	})
 }
 
@@ -373,11 +438,14 @@ type mcpCall struct {
 // handleStats — статистика индекса проекта + нагрузка по mcp-calls.jsonl.
 func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
-	resp := map[string]any{"path": path, "store": s.opts.Store}
+	s.mu.Lock()
+	store, dsn, logPath := s.opts.Store, s.opts.PGDSN, s.opts.LogPath
+	s.mu.Unlock()
+	resp := map[string]any{"path": path, "store": store}
 
-	switch s.opts.Store {
+	switch store {
 	case "pg":
-		pg, err := index.OpenPG(s.opts.PGDSN)
+		pg, err := index.OpenPG(dsn)
 		if err != nil {
 			resp["index_error"] = err.Error()
 			break
@@ -409,7 +477,7 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp["mcp"] = mcpStats(s.opts.LogPath)
+	resp["mcp"] = mcpStats(logPath)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -479,29 +547,32 @@ func mcpStats(logPath string) map[string]any {
 // handleSnippet — готовый блок mcpServers для конфига агента.
 func (s *server) handleSnippet(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
+	s.mu.Lock()
+	opts := s.opts
+	s.mu.Unlock()
 	args := []string{"serve", "--project", path}
-	if s.opts.Store != "" && s.opts.Store != "sqlite" {
-		args = append(args, "--store", s.opts.Store)
-		if s.opts.Store == "pg" {
-			args = append(args, "--pg-dsn", s.opts.PGDSN)
+	if opts.Store != "" && opts.Store != "sqlite" {
+		args = append(args, "--store", opts.Store)
+		if opts.Store == "pg" {
+			args = append(args, "--pg-dsn", opts.PGDSN)
 		}
 	}
-	if s.opts.Embed != "" {
-		args = append(args, "--embed", s.opts.Embed, "--embed-dir", s.opts.EmbedDir)
+	if opts.Embed != "" {
+		args = append(args, "--embed", opts.Embed, "--embed-dir", opts.EmbedDir)
 	}
-	if s.opts.Laya != "" && s.opts.Laya != "heuristic" {
-		args = append(args, "--laya", s.opts.Laya)
-		if s.opts.LayaDir != "" {
-			args = append(args, "--laya-dir", s.opts.LayaDir)
+	if opts.Laya != "" && opts.Laya != "heuristic" {
+		args = append(args, "--laya", opts.Laya)
+		if opts.LayaDir != "" {
+			args = append(args, "--laya-dir", opts.LayaDir)
 		}
 	}
-	if s.opts.Device != "" && s.opts.Device != "cpu" {
-		args = append(args, "--device", s.opts.Device)
+	if opts.Device != "" && opts.Device != "cpu" {
+		args = append(args, "--device", opts.Device)
 	}
 	snippet := map[string]any{
 		"mcpServers": map[string]any{
 			"codepilot": map[string]any{
-				"command": s.opts.BinPath,
+				"command": opts.BinPath,
 				"args":    args,
 			},
 		},
