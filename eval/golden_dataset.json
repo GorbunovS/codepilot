@@ -1,0 +1,112 @@
+{
+  "questions": [
+    {
+      "id": "q01",
+      "question": "Где проверяется токен сессии?",
+      "question_lang": "ru",
+      "type": "symbol_lookup",
+      "language": "go",
+      "expected_files": ["internal/auth/auth.go"],
+      "expected_symbols": ["ValidateToken"]
+    },
+    {
+      "id": "q02",
+      "question": "How is the discount for an order calculated?",
+      "question_lang": "en",
+      "type": "semantic",
+      "language": "go",
+      "expected_files": ["internal/orders/orders.go"],
+      "expected_symbols": ["CalculateDiscount"]
+    },
+    {
+      "id": "q03",
+      "question": "Где вычисляется НДС в счёте?",
+      "question_lang": "ru",
+      "type": "semantic",
+      "language": "python",
+      "expected_files": ["billing/invoice.py"],
+      "expected_symbols": ["apply_vat"]
+    },
+    {
+      "id": "q04",
+      "question": "Where does the frontend send a new order?",
+      "question_lang": "en",
+      "type": "semantic",
+      "language": "js",
+      "expected_files": ["web/api/client.js"],
+      "expected_symbols": ["createOrder"]
+    },
+    {
+      "id": "q05",
+      "question": "Что происходит при нажатии кнопки оплаты в карточке заказа?",
+      "question_lang": "ru",
+      "type": "semantic",
+      "language": "vue",
+      "expected_files": ["web/components/OrderCard.vue"],
+      "expected_symbols": ["pay"]
+    },
+    {
+      "id": "q06",
+      "question": "Where is the invalid token error defined?",
+      "question_lang": "en",
+      "type": "symbol_lookup",
+      "language": "go",
+      "expected_files": ["internal/auth/auth.go"],
+      "expected_symbols": ["ErrInvalidToken"]
+    },
+    {
+      "id": "q07",
+      "question": "Как создаётся счёт на оплату по заказу?",
+      "question_lang": "ru",
+      "type": "semantic",
+      "language": "python",
+      "expected_files": ["billing/invoice.py"],
+      "expected_symbols": ["generate_invoice"]
+    },
+    {
+      "id": "q08",
+      "question": "How are API errors handled on the client?",
+      "question_lang": "en",
+      "type": "semantic",
+      "language": "js",
+      "expected_files": ["web/api/client.js"],
+      "expected_symbols": ["handleError"]
+    },
+    {
+      "id": "q09",
+      "question": "Почему заказ без позиций отклоняется?",
+      "question_lang": "ru",
+      "type": "semantic",
+      "language": "go",
+      "expected_files": ["internal/orders/orders.go"],
+      "expected_symbols": ["CreateOrder", "ErrEmptyOrder"]
+    },
+    {
+      "id": "q10",
+      "question": "How is a session token issued and what is its format?",
+      "question_lang": "en",
+      "type": "semantic",
+      "language": "go",
+      "expected_files": ["internal/auth/auth.go"],
+      "expected_symbols": ["IssueToken"]
+    },
+    {
+      "id": "q11",
+      "question": "Как форматируется итоговая сумма заказа в интерфейсе?",
+      "question_lang": "ru",
+      "type": "semantic",
+      "language": "vue",
+      "expected_files": ["web/components/OrderCard.vue"],
+      "expected_symbols": ["formattedTotal"]
+    },
+    {
+      "id": "q12",
+      "question": "What is the VAT rate used in billing?",
+      "question_lang": "en",
+      "type": "symbol_lookup",
+      "language": "python",
+      "expected_files": ["billing/invoice.py"],
+      "expected_symbols": ["VAT_RATE"]
+    }
+  ]
+}

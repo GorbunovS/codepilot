@@ -1,0 +1,17 @@
+# Собранный бинарь
+codepilot.exe
+codepilot
+
+# Нативный рантайм и модели (скачиваются/генерируются отдельно, см. README)
+bin/
+models/
+
+# Генерируемые индексы и логи
+sample_project/index.json
+mcp-calls.jsonl
+
+# Python-окружение офлайн-инструментов
+tools/laya-export/.venv/
+
+# Отчёты eval перегенерируются командой eval
+# (eval/report.md оставляем в репозитории как пример)
