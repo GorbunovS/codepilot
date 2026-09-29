@@ -41,9 +41,10 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
 | `sample_project/` | демо-репозиторий для eval/bench |
 | `scripts/post-commit` | git hook: инкрементальное обновление индекса после коммита |
 | `scripts/download_models.sh` | скачивание e5-small ONNX в `models/` |
+| `scripts/download_laya_src.sh` | скачивание чекпоинта Laya с HF (resume-цикл curl `-C -`, ~650 МБ) |
 | `Dockerfile`, `docker-compose.yml` | стенд: Postgres+pgvector (db) + CLI (app) |
 | `third_party/onnxruntime-purego` | vendored ONNX runtime (см. ниже) |
-| `tools/laya-export` | офлайн-экспорт/квантизация модели Laya |
+| `tools/laya-export` | офлайн-экспорт/квантизация модели Laya (`requirements.txt` — torch 2.x + laya + onnxscript, Python ≥3.12) |
 
 ## Инварианты и специфика (важно)
 

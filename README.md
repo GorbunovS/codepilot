@@ -121,7 +121,18 @@ Recall@1 без всякой Laya; индексация sample_project — ~16 �
 
 Модель `convaiinnovations/laya-multilingual` экспортирована в ONNX и лежит в
 `models/laya-multilingual/` (контракт препроцессинга и паритет с PyTorch —
-в `models/laya-multilingual/SPEC.md`). Запуск с нейросетевым слоем решений:
+в `models/laya-multilingual/SPEC.md`). Установка из чекпоинта с Hugging Face:
+
+```bash
+./scripts/download_laya_src.sh                       # чекпоинт ~650 МБ в models/laya-multilingual-src/
+uv venv --python 3.12 tools/laya-export/.venv        # нужен Python ≥3.12 (для torch 2.x)
+uv pip install --python tools/laya-export/.venv/bin/python -r tools/laya-export/requirements.txt
+tools/laya-export/.venv/bin/python tools/laya-export/export_onnx.py \
+    models/laya-multilingual-src models/laya-multilingual
+```
+
+Экспорт проверяет паритет с PyTorch (у нас: max |Δlogits| = 4.2e-05).
+Запуск с нейросетевым слоем решений:
 
 ```bash
 ./codepilot eval --laya onnx     # реранк Score + гейт Noul выполняет Laya
@@ -130,9 +141,11 @@ Recall@1 без всякой Laya; индексация sample_project — ~16 �
 ```
 
 - Движок инференса: `shota3506/onnxruntime-purego` (pure Go, без cgo) +
-  нативная `bin/onnxruntime.dll` (v1.23.x). Пакет vendored в `third_party/`
-  с патчем: загрузка DLL через `LoadLibrary` и путь к модели в UTF-16
-  (в апстриме Windows не поддержан).
+  нативная onnxruntime v1.23.x — `bin/onnxruntime.dll` (Windows) или
+  `bin/libonnxruntime.dylib` (macOS) / `libonnxruntime.so` (Linux); поиск —
+  `internal/ortlib` (env `CODEPILOT_ONNXRUNTIME_DLL`). Пакет vendored в
+  `third_party/` с патчем: загрузка DLL через `LoadLibrary` и путь к модели
+  в UTF-16 (в апстриме Windows не поддержан).
 - Токенизатор: `sugarme/tokenizer` (pure Go), читает `tokenizer.json` чекпоинта.
 - Реранк батчевый: 20 кандидатов одним прогоном модели.
 - При отсутствии модели/DLL — автоматический fallback на эвристику.
@@ -154,6 +167,12 @@ Recall@1 без всякой Laya; индексация sample_project — ~16 �
   критерию ТЗ**: метрики просели (max |Δlogits| = 1.49, Recall@5 blend
   1.00 → 0.92). Скрипт `tools/laya-export/quantize_int8.py` сохранён —
   после файнтюна квантизацию нужно переоценить.
+- Полный стек (pg + e5-эмбеддинги + Laya, тот же датасет): blend даёт
+  Recall@1 = 0.92, Recall@5 = 1.00, MRR = 0.94 — но plain hybrid на e5-пуле
+  без Laya уже даёт 0.92/1.00/0.96, а чистый реранк просаживает Recall@5 до
+  0.92 (zero-shot Laya выталкивает правильный чанк из топ-5). Вывод: на
+  сильном эмбеддере ценность zero-shot Laya — не реранк, а гейт Noul и цель
+  для файнтюна на теневых логах.
 - Latency CPU (12 ядер): ~85–190 мс на инференс при L≈110; реранк пула
   из 20 чанков — секунды (для прода: GPU EP, обрезка max_len).
 - `find_references` не понимает блочные комментарии и не различает

@@ -1,0 +1,10 @@
+# Окружение для экспорта/квантизации Laya (офлайн-инструменты).
+# Установка: uv venv --python 3.12 tools/laya-export/.venv
+#            uv pip install --python tools/laya-export/.venv/bin/python -r tools/laya-export/requirements.txt
+torch
+safetensors
+laya
+onnxruntime
+onnx
+onnxscript
+numpy
