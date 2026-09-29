@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"codepilot/internal/bench"
+	"codepilot/internal/embed"
 	"codepilot/internal/eval"
 	"codepilot/internal/index"
 	"codepilot/internal/laya"
@@ -68,10 +69,15 @@ func usage() {
 Флаги eval:   --project sample_project --dataset eval/golden_dataset.json [--laya onnx]
 Флаги bench:  --project sample_project --dataset eval/golden_dataset.json [--laya onnx]
 
+Хранилище: --store sqlite (по умолчанию) | --store pg (Postgres+pgvector,
+  --pg-dsn, --embed onnx [--embed-dir models/e5-small]).
+  Переменные: CODEPILOT_STORE, CODEPILOT_PG_DSN, CODEPILOT_EMBED.
+
 Слой решений Laya: --laya heuristic (по умолчанию) | --laya onnx
   [--laya-dir models/laya-multilingual]; также читается CODEPILOT_LAYA.
-Режимы поиска: fts (BM25), vec (TF-IDF cosine), hybrid (RRF k=60),
-hybrid+rerank (порядок задаёт Laya), hybrid+blend (0.5·Laya + 0.5·RRF).
+Режимы поиска: fts (BM25), vec (TF-IDF cosine; в pg-режиме — e5+pgvector),
+hybrid (RRF k=60), hybrid+rerank (порядок задаёт Laya), hybrid+blend
+(0.5·Laya + 0.5·RRF).
 `)
 }
 
@@ -93,26 +99,82 @@ func closeScorer(s laya.Scorer) {
 	}
 }
 
-// loadIndex открывает индекс проекта или подсказывает про codepilot index.
-func loadIndex(project string) (*index.Index, error) {
+// storeFlagsT — общие флаги хранилища и эмбеддингов для всех команд.
+type storeFlagsT struct {
+	store    *string
+	dsn      *string
+	embed    *string
+	embedDir *string
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func storeFlags(fs *flag.FlagSet) storeFlagsT {
+	return storeFlagsT{
+		store:    fs.String("store", envOr("CODEPILOT_STORE", "sqlite"), "хранилище индекса: sqlite|pg"),
+		dsn:      fs.String("pg-dsn", envOr("CODEPILOT_PG_DSN", "postgres://codepilot:codepilot@localhost:5432/codepilot?sslmode=disable"), "DSN Postgres (режим pg)"),
+		embed:    fs.String("embed", envOr("CODEPILOT_EMBED", ""), `эмбеддер: onnx|"" (по умолчанию без эмбеддингов)`),
+		embedDir: fs.String("embed-dir", "models/e5-small", "каталог ONNX-модели эмбеддингов"),
+	}
+}
+
+// loadIndexStore открывает индекс проекта из выбранного хранилища.
+// В режиме pg подключает эмбеддер (если embedKind == "onnx") и возвращает
+// cleanup для освобождения ресурсов.
+func loadIndexStore(project, store, dsn, embedKind, embedDir string) (*index.Index, func(), error) {
 	abs, err := filepath.Abs(project)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	path := index.IndexPath(abs)
-	if _, err := os.Stat(path); err != nil {
-		return nil, fmt.Errorf("индекс не найден (%s); сначала выполните: codepilot index %s", path, project)
+	switch store {
+	case "sqlite", "":
+		path := index.IndexPath(abs)
+		if _, err := os.Stat(path); err != nil {
+			return nil, nil, fmt.Errorf("индекс не найден (%s); сначала выполните: codepilot index %s", path, project)
+		}
+		ix, err := index.Load(path)
+		return ix, func() {}, err
+	case "pg":
+		pg, err := index.OpenPG(dsn)
+		if err != nil {
+			return nil, nil, err
+		}
+		cleanup := func() { pg.Close() }
+		ix, err := pg.Load(abs)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		ix.PG = pg
+		if embedKind == "onnx" {
+			emb, err := embed.Load(embedDir)
+			if err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+			ix.Emb = emb
+			cleanup = func() { emb.Close(); pg.Close() }
+		}
+		return ix, cleanup, nil
+	default:
+		return nil, nil, fmt.Errorf("неизвестное хранилище %q (sqlite|pg)", store)
 	}
-	return index.Load(path)
 }
 
 func cmdIndex(args []string) error {
 	fs := flag.NewFlagSet("index", flag.ExitOnError)
 	project := fs.String("project", "", "корень проекта (приоритетнее позиционного аргумента)")
-	_ = fs.Parse(args)
+	sf := storeFlags(fs)
+	flagArgs, positional := splitFlags(fs, args)
+	_ = fs.Parse(flagArgs)
 	root := *project
-	if root == "" && fs.NArg() > 0 {
-		root = fs.Arg(0)
+	if root == "" && len(positional) > 0 {
+		root = positional[0]
 	}
 	if root == "" {
 		root = "."
@@ -121,11 +183,36 @@ func cmdIndex(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := ix.Save(); err != nil {
-		return fmt.Errorf("сохранение индекса: %w", err)
+	switch *sf.store {
+	case "sqlite", "":
+		if err := ix.Save(); err != nil {
+			return fmt.Errorf("сохранение индекса: %w", err)
+		}
+		fmt.Printf("%s: файлов %d, чанков %d (переиндексировано %d, без изменений %d, удалено %d)\n",
+			ix.ProjectRoot, st.Files, st.Chunks, st.Reindexed, st.Kept, st.Removed)
+	case "pg":
+		if *sf.embed != "onnx" {
+			return fmt.Errorf("--store pg требует --embed onnx (векторы e5); без эмбеддингов используйте --store sqlite")
+		}
+		emb, err := embed.Load(*sf.embedDir)
+		if err != nil {
+			return err
+		}
+		defer emb.Close()
+		pg, err := index.OpenPG(*sf.dsn)
+		if err != nil {
+			return err
+		}
+		defer pg.Close()
+		embedded, err := pg.Save(ix, emb)
+		if err != nil {
+			return fmt.Errorf("сохранение индекса (pg): %w", err)
+		}
+		fmt.Printf("%s (pg): файлов %d, чанков %d (переиндексировано %d, без изменений %d, удалено %d), векторов пересчитано %d\n",
+			ix.ProjectRoot, st.Files, st.Chunks, st.Reindexed, st.Kept, st.Removed, embedded)
+	default:
+		return fmt.Errorf("неизвестное хранилище %q (sqlite|pg)", *sf.store)
 	}
-	fmt.Printf("%s: файлов %d, чанков %d (переиндексировано %d, без изменений %d, удалено %d)\n",
-		ix.ProjectRoot, st.Files, st.Chunks, st.Reindexed, st.Kept, st.Removed)
 	return nil
 }
 
@@ -167,16 +254,18 @@ func cmdSearch(args []string) error {
 	top := fs.Int("top", 5, "сколько результатов показать")
 	content := fs.Bool("content", false, "печатать содержимое чанков")
 	layaKind, layaDir := layaFlags(fs)
+	sf := storeFlags(fs)
 	flagArgs, positional := splitFlags(fs, args)
 	_ = fs.Parse(flagArgs)
 	query := strings.Join(positional, " ")
 	if query == "" {
 		return fmt.Errorf("пустой запрос: codepilot search \"запрос\"")
 	}
-	ix, err := loadIndex(*project)
+	ix, cleanup, err := loadIndexStore(*project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	scorer := resolveScorer(*layaKind, *layaDir)
 	defer closeScorer(scorer)
 	hits, err := ix.Search(query, *mode, *top, scorer)
@@ -209,11 +298,13 @@ func cmdServe(args []string) error {
 	project := fs.String("project", ".", "корень проекта")
 	logPath := fs.String("log", "mcp-calls.jsonl", "jsonl-лог вызовов инструментов (пустая строка — без лога)")
 	layaKind, layaDir := layaFlags(fs)
+	sf := storeFlags(fs)
 	_ = fs.Parse(args)
-	ix, err := loadIndex(*project)
+	ix, cleanup, err := loadIndexStore(*project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	scorer := resolveScorer(*layaKind, *layaDir)
 	defer closeScorer(scorer)
 	// stdout — канал протокола MCP, всё служебное только в stderr.
@@ -228,11 +319,13 @@ func cmdEval(args []string) error {
 	report := fs.String("report", "eval/report.md", "куда писать отчёт")
 	top := fs.Int("top", 5, "topK поиска")
 	layaKind, layaDir := layaFlags(fs)
+	sf := storeFlags(fs)
 	_ = fs.Parse(args)
-	ix, ds, scorer, err := setupRun(*project, *dataset, *layaKind, *layaDir)
+	ix, ds, scorer, cleanup, err := setupRun(*project, *dataset, *layaKind, *layaDir, sf)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	defer closeScorer(scorer)
 	results, err := eval.Run(ix, ds, scorer, *top)
 	if err != nil {
@@ -252,11 +345,13 @@ func cmdBench(args []string) error {
 	dataset := fs.String("dataset", "eval/golden_dataset.json", "золотой датасет")
 	top := fs.Int("top", 5, "topK поиска")
 	layaKind, layaDir := layaFlags(fs)
+	sf := storeFlags(fs)
 	_ = fs.Parse(args)
-	ix, ds, scorer, err := setupRun(*project, *dataset, *layaKind, *layaDir)
+	ix, ds, scorer, cleanup, err := setupRun(*project, *dataset, *layaKind, *layaDir, sf)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	defer closeScorer(scorer)
 	results, err := bench.Run(ix, ds, scorer, *top)
 	if err != nil {
@@ -272,14 +367,15 @@ func cmdBench(args []string) error {
 }
 
 // setupRun — общая подготовка eval/bench: индекс, датасет, слой решений.
-func setupRun(project, dataset, layaKind, layaDir string) (*index.Index, *eval.Dataset, laya.Scorer, error) {
-	ix, err := loadIndex(project)
+func setupRun(project, dataset, layaKind, layaDir string, sf storeFlagsT) (*index.Index, *eval.Dataset, laya.Scorer, func(), error) {
+	ix, cleanup, err := loadIndexStore(project, *sf.store, *sf.dsn, *sf.embed, *sf.embedDir)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	ds, err := eval.LoadDataset(dataset)
 	if err != nil {
-		return nil, nil, nil, err
+		cleanup()
+		return nil, nil, nil, nil, err
 	}
-	return ix, ds, resolveScorer(layaKind, layaDir), nil
+	return ix, ds, resolveScorer(layaKind, layaDir), cleanup, nil
 }

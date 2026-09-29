@@ -31,13 +31,17 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
 |---|---|
 | `cmd/codepilot/main.go` | CLI (stdlib `flag`; `splitFlags` допускает флаги после позиционного запроса) |
 | `internal/chunk/` | чанкеры: `.go` (go/parser+ast), `.py`/`.js` (regex), `.vue` (SFC); fallback-окна 60/10 |
-| `internal/index/` | индекс: SQLite `index.db` (store.go), BM25 k1=1.5 b=0.75, TF-IDF, гибрид RRF k=60 (search.go), лексикон синонимов (lexicon.go) |
+| `internal/index/` | индекс: SQLite `index.db` (store.go) или Postgres+pgvector (pgstore.go), BM25 k1=1.5 b=0.75, TF-IDF, гибрид RRF k=60 (search.go), лексикон синонимов (lexicon.go) |
+| `internal/embed/` | bi-encoder эмбеддинги e5-small (ONNX): префиксы `query: `/`passage: `, mean pooling, L2-норма |
+| `internal/ortlib/` | поиск нативной onnxruntime (.dll/.dylib/.so), env `CODEPILOT_ONNXRUNTIME_DLL` |
 | `internal/laya/` | слой решений: интерфейс `Scorer` (Score 0..5, Noul 0..1), эвристика (laya.go), ONNX-модель (onnx.go) |
 | `internal/mcp/` | MCP stdio-сервер: newline-delimited JSON-RPC 2.0, 4 инструмента, лог `mcp-calls.jsonl` |
 | `internal/eval/` | метрики A=fts B=vec C=hybrid D=hybrid+rerank E=hybrid+blend |
 | `internal/bench/` | симуляция двух агентов; токены = байты/4; RAG-агент всегда `hybrid+blend` |
 | `sample_project/` | демо-репозиторий для eval/bench |
 | `scripts/post-commit` | git hook: инкрементальное обновление индекса после коммита |
+| `scripts/download_models.sh` | скачивание e5-small ONNX в `models/` |
+| `Dockerfile`, `docker-compose.yml` | стенд: Postgres+pgvector (db) + CLI (app) |
 | `third_party/onnxruntime-purego` | vendored ONNX runtime (см. ниже) |
 | `tools/laya-export` | офлайн-экспорт/квантизация модели Laya |
 
@@ -67,6 +71,12 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
   пока Laya zero-shot).
 - **Индекс лежит в корне индексируемого проекта** (`<path>/index.db`) и валяется
   там рядом с чужим кодом. Для прода планируется централизованное хранилище.
+- **pg-режим (`--store pg`).** Чанки и векторы e5 (384 dim) в Postgres+pgvector,
+  ключ проекта — абсолютный путь корня (в Docker это `/work/...`, снаружи —
+  хостовый путь: это разные ключи). Эмбеддинги пересчитываются по sha256 чанка.
+  Контракт e5: префиксы `query: `/`passage: `, mean pooling, L2-норма — не менять
+  без пересборки всех векторов. Интеграционный тест pgstore требует
+  `CODEPILOT_PG_TEST_DSN`, без него скипается.
 - Комментарии в коде и сообщения коммитов — на русском.
 
 ## Контракты, от которых зависят другие части

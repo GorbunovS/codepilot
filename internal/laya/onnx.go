@@ -28,6 +28,7 @@ import (
 
 	"codepilot/internal/chunk"
 	"codepilot/internal/index"
+	"codepilot/internal/ortlib"
 
 	ort "github.com/shota3506/onnxruntime-purego/onnxruntime"
 	"github.com/sugarme/tokenizer"
@@ -112,8 +113,8 @@ var _ Scorer = (*Model)(nil)
 var _ index.Scorer = (*Model)(nil)
 
 // Load загружает модель из modelDir: tokenizer.json, laya.onnx, laya_config.json.
-// Путь к onnxruntime.dll: переменная CODEPILOT_ONNXRUNTIME_DLL, затем
-// modelDir/onnxruntime.dll, bin/onnxruntime.dll, onnxruntime.dll из PATH.
+// Нативная библиотека onnxruntime ищется через ortlib.Find
+// ($CODEPILOT_ONNXRUNTIME_DLL, modelDir, bin/, системные пути).
 func Load(modelDir string) (*Model, error) {
 	cfg, err := loadConfig(modelDir)
 	if err != nil {
@@ -127,9 +128,9 @@ func Load(modelDir string) (*Model, error) {
 	if _, err := os.Stat(onnxPath); err != nil {
 		return nil, fmt.Errorf("laya: laya.onnx не найден в %s: %w", modelDir, err)
 	}
-	dllPath := findRuntimeDLL(modelDir)
+	dllPath := ortlib.Find(modelDir)
 	if dllPath == "" {
-		return nil, fmt.Errorf("laya: onnxruntime.dll не найден (проверены CODEPILOT_ONNXRUNTIME_DLL, %s, bin/)", modelDir)
+		return nil, fmt.Errorf("laya: onnxruntime не найден (проверены %s, %s, bin/)", ortlib.EnvVar, modelDir)
 	}
 
 	tk, err := pretrained.FromFile(tokPath)
@@ -192,21 +193,7 @@ func loadConfig(modelDir string) (ModelConfig, error) {
 }
 
 func findRuntimeDLL(modelDir string) string {
-	if p := os.Getenv("CODEPILOT_ONNXRUNTIME_DLL"); p != "" {
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	for _, p := range []string{
-		filepath.Join(modelDir, "onnxruntime.dll"),
-		filepath.Join("bin", "onnxruntime.dll"),
-		"onnxruntime.dll",
-	} {
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	return ""
+	return ortlib.Find(modelDir)
 }
 
 // resolveSpecialTokens достаёт id спецтокенов из added_tokens tokenizer.json.

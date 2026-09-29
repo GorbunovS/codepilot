@@ -40,27 +40,64 @@ func QueryTerms(query string) []string {
 }
 
 // Search выполняет поиск в одном из режимов:
-// "fts" (BM25), "vec" (TF-IDF cosine), "hybrid" (RRF слияние),
-// "hybrid+rerank" (hybrid топ-20 -> Laya Score -> топ-K).
+// "fts" (BM25), "vec" (TF-IDF cosine; при подключённых PG+Emb — e5+pgvector),
+// "hybrid" (RRF слияние), "hybrid+rerank"/"hybrid+blend" (реранк слоем решений).
 func (ix *Index) Search(query, mode string, topK int, scorer Scorer) ([]SearchHit, error) {
 	qt := QueryTerms(query)
 	switch mode {
 	case "fts":
 		return ix.topHits(ix.bm25(qt), topK), nil
 	case "vec":
+		if ix.PG != nil && ix.Emb != nil {
+			return ix.pgVecSearch(query, topK)
+		}
 		return ix.topHits(ix.cosine(qt), topK), nil
 	case "hybrid":
-		return ix.hybrid(qt, topK), nil
+		return ix.hybrid(query, qt, topK), nil
 	case "hybrid+rerank":
 		// Чистый реранк слоем решений: порядок полностью задаёт Laya.
-		return ix.rerank(ix.hybrid(qt, rerankPool), query, topK, scorer, 1.0)
+		return ix.rerank(ix.hybrid(query, qt, rerankPool), query, topK, scorer, 1.0)
 	case "hybrid+blend":
 		// Смесь alpha*Laya + (1-alpha)*RRF: пока Laya zero-shot, retrieval-ранк
 		// удерживает точность топ-1; после файнтюна alpha можно поднять.
-		return ix.rerank(ix.hybrid(qt, rerankPool), query, topK, scorer, blendAlpha)
+		return ix.rerank(ix.hybrid(query, qt, rerankPool), query, topK, scorer, blendAlpha)
 	default:
 		return nil, fmt.Errorf("unknown search mode %q", mode)
 	}
+}
+
+// pgVecSearch — векторный поиск через pgvector: сырой запрос -> e5 -> ANN.
+func (ix *Index) pgVecSearch(query string, k int) ([]SearchHit, error) {
+	vecs, err := ix.Emb.EmbedQueries([]string{query})
+	if err != nil {
+		return nil, err
+	}
+	vhits, err := ix.PG.VecSearch(ix.ProjectRoot, vecs[0], k)
+	if err != nil {
+		return nil, err
+	}
+	hits := make([]SearchHit, 0, len(vhits))
+	for _, vh := range vhits {
+		if d, ok := ix.byID[vh.ID]; ok {
+			hits = append(hits, SearchHit{Chunk: ix.Chunks[d], Score: vh.Score})
+		}
+	}
+	return hits, nil
+}
+
+// vecRanked — топ-k индексов чанков векторным поиском для RRF-слияния:
+// pgvector при наличии, иначе легаси TF-IDF cosine.
+func (ix *Index) vecRanked(query string, qt []string, k int) []int {
+	if ix.PG != nil && ix.Emb != nil {
+		if hits, err := ix.pgVecSearch(query, k); err == nil {
+			ids := make([]int, 0, len(hits))
+			for _, h := range hits {
+				ids = append(ids, ix.byID[h.Chunk.ID])
+			}
+			return ids
+		}
+	}
+	return ranked(ix.cosine(qt), k)
 }
 
 // blendAlpha — вес Laya в режиме hybrid+blend (0..1).
@@ -156,12 +193,12 @@ func (ix *Index) cosine(qt []string) []float64 {
 }
 
 // hybrid — RRF (k=60) слияние топ-50 BM25 и топ-50 vector.
-func (ix *Index) hybrid(qt []string, topK int) []SearchHit {
+func (ix *Index) hybrid(query string, qt []string, topK int) []SearchHit {
 	acc := map[int]float64{}
 	for r, d := range ranked(ix.bm25(qt), rrfListSize) {
 		acc[d] += 1 / (rrfK + float64(r) + 1)
 	}
-	for r, d := range ranked(ix.cosine(qt), rrfListSize) {
+	for r, d := range ix.vecRanked(query, qt, rrfListSize) {
 		acc[d] += 1 / (rrfK + float64(r) + 1)
 	}
 	hits := make([]SearchHit, 0, len(acc))

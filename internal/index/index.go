@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"codepilot/internal/chunk"
+	"codepilot/internal/embed"
 )
 
 // DefaultIndexName — имя файла индекса в корне проекта.
@@ -24,6 +25,11 @@ type Index struct {
 	Manifest       map[string]string `json:"manifest"`        // file -> sha256
 	Chunks         []chunk.Chunk     `json:"chunks"`
 
+	// Emb и PG подключают векторный режим (e5 + pgvector); nil — легаси TF-IDF.
+	// Заполняются снаружи (CLI) после Load, в хранилище не сериализуются.
+	Emb *embed.Embedder `json:"-"`
+	PG  *PGStore        `json:"-"`
+
 	tf    []map[string]int
 	dlen  []int
 	df    map[string]int
@@ -31,6 +37,7 @@ type Index struct {
 	idf   map[string]float64
 	vecs  []map[string]float64
 	bySym map[string][]int
+	byID  map[string]int
 }
 
 // Stats — статистика одного прогона индексации.
@@ -171,6 +178,7 @@ func (ix *Index) buildModel() {
 	ix.dlen = make([]int, n)
 	ix.df = map[string]int{}
 	ix.bySym = map[string][]int{}
+	ix.byID = map[string]int{}
 	for i, c := range ix.Chunks {
 		var toks []string
 		sym := Tokenize(c.SymbolName)
@@ -194,6 +202,7 @@ func (ix *Index) buildModel() {
 			ix.df[t]++
 		}
 		ix.bySym[strings.ToLower(c.SymbolName)] = append(ix.bySym[strings.ToLower(c.SymbolName)], i)
+		ix.byID[c.ID] = i
 	}
 	var total int
 	for _, l := range ix.dlen {

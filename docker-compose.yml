@@ -1,0 +1,44 @@
+# Стенд codepilot: Postgres+pgvector + CLI (index/search/eval/bench/serve).
+#
+#   ./scripts/download_models.sh                 # один раз: e5-small
+#   docker compose up -d db                      # поднять БД
+#   docker compose build app                     # собрать CLI
+#   docker compose run --rm app index sample_project
+#   docker compose run --rm app eval
+#   docker compose run --rm app search "запрос" --project sample_project
+#   docker compose run --rm -T app serve --project sample_project   # MCP (stdio)
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: codepilot
+      POSTGRES_PASSWORD: codepilot
+      POSTGRES_DB: codepilot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codepilot -d codepilot"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      CODEPILOT_STORE: pg
+      CODEPILOT_PG_DSN: postgres://codepilot:codepilot@db:5432/codepilot?sslmode=disable
+      CODEPILOT_EMBED: onnx
+      CODEPILOT_ONNXRUNTIME_DLL: /usr/local/lib/libonnxruntime.so
+    volumes:
+      - ./models:/work/models:ro
+      - ./sample_project:/work/sample_project
+      - ./eval:/work/eval
+    stdin_open: true
+
+volumes:
+  pgdata:

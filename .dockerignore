@@ -1,0 +1,8 @@
+.git
+models
+bin
+codepilot
+codepilot.exe
+index.db*
+mcp-calls.jsonl
+*.log

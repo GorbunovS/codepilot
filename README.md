@@ -35,7 +35,11 @@ go build -o codepilot ./cmd/codepilot
 ```
 cmd/codepilot/main.go   CLI
 internal/chunk/         чанкеры (.go — go/parser+ast; .py/.js — regex; .vue — SFC; fallback — окна 60/10)
-internal/index/         индекс (SQLite index.db + manifest), BM25 (k1=1.5, b=0.75), TF-IDF, гибрид RRF (k=60)
+internal/index/         индекс (SQLite index.db + manifest; опц. Postgres+pgvector в pgstore.go),
+                        BM25 (k1=1.5, b=0.75), TF-IDF, гибрид RRF (k=60)
+internal/embed/         bi-encoder эмбеддинги multilingual-e5-small (ONNX; префиксы query:/passage:,
+                        mean pooling, L2-норма)
+internal/ortlib/        поиск нативной onnxruntime (.dll/.dylib/.so, env CODEPILOT_ONNXRUNTIME_DLL)
 internal/laya/          слой решений: интерфейс Scorer (Score 0..5, Noul 0..1) + эвристика
 internal/mcp/           минимальный MCP stdio-сервер
 internal/eval/          метрики по золотому датасету
@@ -47,11 +51,11 @@ internal/bench/         сравнение токенов baseline vs RAG
 | Компонент (ТЗ) | В прототипе | В проде |
 |---|---|---|
 | tree-sitter чанкинг | go/parser+go/ast для Go, regex для Python/JS/Vue, fallback-окна | tree-sitter для всех языков |
-| Postgres + pgvector | SQLite `index.db` (pure-Go `modernc.org/sqlite`) + in-memory BM25/TF-IDF | Postgres + pgvector для больших репо |
+| Postgres + pgvector | SQLite `index.db` (pure-Go `modernc.org/sqlite`) + in-memory BM25/TF-IDF; **есть** pg-режим `--store pg` (pgvector HNSW + e5) | Postgres FTS + файнтюн эмбеддера на логах |
 | ONNX Laya (convaiinnovations/laya-multilingual) | **есть**: ONNX-инференс в Go (`--laya onnx`), эвристика как fallback | + файнтюн на теневых логах, int8, GPU EP |
 | mcp-go | свой минимальный MCP stdio (JSON-RPC по строкам) | официальный SDK mcp-go |
 | LSP (определения/референсы) | индексные символы + word-boundary grep без строк/комментариев | LSP-серверы |
-| Эмбеддинги | TF-IDF векторы (cosine) как замена | векторные эмбеддинги + pgvector |
+| Эмбеддинги | TF-IDF (sqlite-режим) или e5-small ONNX (pg-режим, `--embed onnx`) | файнтюн bi-encoder на теневых логах проекта |
 
 ## Ограничения прототипа
 
@@ -68,6 +72,50 @@ internal/bench/         сравнение токенов baseline vs RAG
 
 `.kimi/skills/codepilot-rag/SKILL.md` — инструкция агенту: когда и как
 пользоваться MCP-инструментами codepilot вместо чтения файлов целиком.
+
+## Векторный режим: Postgres + pgvector + e5 (Docker)
+
+По умолчанию индекс живёт в `<path>/index.db` (SQLite), а «векторный» поиск —
+TF-IDF в памяти. Режим `--store pg` — настоящая векторная БД: чанки и векторы
+`multilingual-e5-small` (ONNX, 384 dim, fp32) в Postgres + pgvector (HNSW),
+BM25 по-прежнему строится в памяти. Один Postgres обслуживает несколько
+проектов (ключ — абсолютный путь корня).
+
+```bash
+./scripts/download_models.sh      # один раз: e5-small ONNX (~470 МБ)
+docker compose up -d db           # Postgres + pgvector
+docker compose build app          # codepilot + onnxruntime для linux
+docker compose run --rm app index sample_project
+docker compose run --rm app eval
+docker compose run --rm app bench
+docker compose run --rm app search "запрос" --project sample_project --mode vec
+docker compose run --rm -T app serve --project sample_project   # MCP по stdio
+```
+
+Локально без Docker (нужны Postgres с pgvector и нативная onnxruntime в
+`bin/` или по пути из `CODEPILOT_ONNXRUNTIME_DLL`):
+
+```bash
+./codepilot index sample_project --store pg --embed onnx
+./codepilot search "запрос" --project sample_project --store pg --embed onnx --mode vec
+```
+
+Переменные окружения: `CODEPILOT_STORE`, `CODEPILOT_PG_DSN`, `CODEPILOT_EMBED`.
+Эмбеддинги пересчитываются только для изменённых чанков (по sha256 файла);
+в sqlite-режиме всё работает как раньше, векторного поиска там нет.
+
+Результаты на том же датасете (12 вопросов, эвристика; E0 = sqlite/TF-IDF,
+E3 = pg/e5-small):
+
+| режим | E0 Recall@1 | E3 Recall@1 | E0 MRR | E3 MRR |
+|---|---|---|---|---|
+| fts | 0.83 | 0.83 | 0.90 | 0.90 |
+| vec | 0.75 | **0.92** | 0.85 | **0.96** |
+| hybrid | 0.75 | **0.92** | 0.86 | **0.96** |
+| hybrid+blend | 0.75 | **0.83** | 0.86 | **0.90** |
+
+Замена TF-IDF на настоящие эмбеддинги подняла vec-режим с 0.75 до 0.92 по
+Recall@1 без всякой Laya; индексация sample_project — ~16 с, повторная — <1 с.
 
 ## Настоящая Laya (ONNX) вместо эвристики
 
