@@ -2,6 +2,8 @@ package index
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -27,7 +29,8 @@ type PGStore struct {
 	pool *pgxpool.Pool
 }
 
-// pgSchema — DDL хранилища. project изолирует несколько репозиториев в одной БД.
+// pgSchema — DDL общей части хранилища. Чанки и вектора лежат в отдельной
+// таблице на каждый проект (chunksTable), здесь только meta.
 var pgSchema = `
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS meta (
@@ -36,9 +39,27 @@ CREATE TABLE IF NOT EXISTS meta (
 	value   TEXT,
 	PRIMARY KEY (project, key)
 );
-CREATE TABLE IF NOT EXISTS chunks (
-	project     TEXT NOT NULL,
-	id          TEXT NOT NULL,
+`
+
+// chunksTable — имя таблицы проекта: chunks_<hex(sha256 пути)[:16]>.
+// Таблица на проект, а не строки с ключом project в общей таблице:
+// смешивание векторов разных проектов структурно невозможно — каждый
+// запрос обращается только к таблице своего проекта, а HNSW-индекс
+// строится по чанкам одного проекта. Имя — hex-константа, безопасно
+// подставляется в SQL без параметризации.
+func chunksTable(project string) string {
+	sum := sha256.Sum256([]byte(project))
+	return "chunks_" + hex.EncodeToString(sum[:])[:16]
+}
+
+// vecIndexName — имя HNSW-индекса таблицы проекта (имена индексов в
+// Postgres глобальны на схему, поэтому суффикс повторяет таблицу).
+func vecIndexName(tbl string) string { return "idx_vec_" + strings.TrimPrefix(tbl, "chunks_") }
+
+// createTableSQL — DDL таблицы проекта.
+func createTableSQL(tbl string) string {
+	return `CREATE TABLE IF NOT EXISTS ` + tbl + ` (
+	id          TEXT PRIMARY KEY,
 	file_path   TEXT NOT NULL,
 	language    TEXT,
 	start_line  INTEGER,
@@ -49,12 +70,98 @@ CREATE TABLE IF NOT EXISTS chunks (
 	doc         TEXT,
 	content     TEXT,
 	hash        TEXT,
-	embedding   vector(` + fmt.Sprint(embed.Dim) + `),
-	PRIMARY KEY (project, id)
-);
-CREATE INDEX IF NOT EXISTS idx_chunks_embedding
-	ON chunks USING hnsw (embedding vector_cosine_ops);
-`
+	embedding   vector(` + fmt.Sprint(embed.Dim) + `)
+)`
+}
+
+// vecIndexSQL — HNSW по косинусной близости для VecSearch.
+func vecIndexSQL(tbl string) string {
+	return `CREATE INDEX IF NOT EXISTS ` + vecIndexName(tbl) +
+		` ON ` + tbl + ` USING hnsw (embedding vector_cosine_ops)`
+}
+
+// bulkThreshold — сколько новых векторов считается «массовой заливкой»: на таком
+// объёме HNSW-индекс дешевле перестроить после вставок, чем поддерживать на
+// каждой вставке. На малых инкрементах индекс остаётся на месте.
+const bulkThreshold = 4096
+
+// ensureTable создаёт таблицу проекта, если её ещё нет.
+func (s *PGStore) ensureTable(ctx context.Context, tbl string) error {
+	_, err := s.pool.Exec(ctx, createTableSQL(tbl))
+	return err
+}
+
+// migrateLegacy переносит строки легаси-таблицы chunks (с колонкой project)
+// в таблицы проектов и удаляет её. No-op, если легаси-таблицы нет.
+func migrateLegacy(ctx context.Context, conn *pgx.Conn) error {
+	var reg *string
+	if err := conn.QueryRow(ctx, `SELECT to_regclass('public.chunks')::text`).Scan(&reg); err != nil {
+		return err
+	}
+	if reg == nil {
+		return nil
+	}
+	prows, err := conn.Query(ctx, `SELECT DISTINCT project FROM chunks`)
+	if err != nil {
+		return err
+	}
+	var projects []string
+	for prows.Next() {
+		var p string
+		if err := prows.Scan(&p); err != nil {
+			prows.Close()
+			return err
+		}
+		projects = append(projects, p)
+	}
+	prows.Close()
+	if err := prows.Err(); err != nil {
+		return err
+	}
+	for _, p := range projects {
+		tbl := chunksTable(p)
+		Logf("pg: миграция легаси-таблицы chunks → %s (проект %s)", tbl, p)
+		if _, err := conn.Exec(ctx, createTableSQL(tbl)); err != nil {
+			return err
+		}
+		if _, err := conn.Exec(ctx, `INSERT INTO `+tbl+`
+			(id, file_path, language, start_line, end_line,
+			 symbol_name, kind, signature, doc, content, hash, embedding)
+			SELECT id, file_path, language, start_line, end_line,
+			 symbol_name, kind, signature, doc, content, hash, embedding
+			FROM chunks WHERE project = $1
+			ON CONFLICT (id) DO NOTHING`, p); err != nil {
+			return err
+		}
+	}
+	// легаси-индекс и таблица уходят вместе; HNSW пересоздастся при Save
+	if _, err := conn.Exec(ctx, `DROP TABLE chunks`); err != nil {
+		return err
+	}
+	return nil
+}
+
+// createVecIndex (пере)создаёт HNSW-индекс после массовой заливки.
+// maintenance_work_mem поднимаем сессионно: построение HNSW упирается в память.
+// Параллельную сборку отключаем: она требует dynamic shared memory, а в
+// Docker-контейнере /dev/shm по умолчанию 64 МБ — сборка падает с
+// «could not resize shared memory segment».
+func (s *PGStore) createVecIndex(ctx context.Context, tbl string) error {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SET maintenance_work_mem = '512MB'`); err != nil {
+		return err
+	}
+	if _, err := conn.Exec(ctx, `SET max_parallel_maintenance_workers = 0`); err != nil {
+		return err
+	}
+	Logf("pg: перестроение HNSW-индекса %s…", vecIndexName(tbl))
+	_, err = conn.Exec(ctx, vecIndexSQL(tbl))
+	return err
+}
 
 // OpenPG подключается к Postgres по DSN и гарантирует схему.
 // Схема создаётся отдельным соединением до пула: регистрация типов pgvector
@@ -68,6 +175,10 @@ func OpenPG(dsn string) (*PGStore, error) {
 	if _, err := conn.Exec(ctx, pgSchema); err != nil {
 		conn.Close(ctx)
 		return nil, fmt.Errorf("pg: schema (расширение vector установлено?): %w", err)
+	}
+	if err := migrateLegacy(ctx, conn); err != nil {
+		conn.Close(ctx)
+		return nil, fmt.Errorf("pg: миграция легаси-таблицы: %w", err)
 	}
 	conn.Close(ctx)
 
@@ -118,13 +229,17 @@ const saveCommitBatch = 2048
 func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error) {
 	ctx := context.Background()
 	project := ix.ProjectRoot
+	tbl := chunksTable(project)
+	if err := s.ensureTable(ctx, tbl); err != nil {
+		return 0, fmt.Errorf("pg: таблица проекта: %w", err)
+	}
 	type row struct {
 		hash   string
 		hasVec bool
 	}
 	existing := map[string]row{} // id -> состояние строки
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, hash, embedding IS NOT NULL FROM chunks WHERE project = $1`, project)
+		`SELECT id, hash, embedding IS NOT NULL FROM `+tbl)
 	if err != nil {
 		return 0, err
 	}
@@ -158,15 +273,30 @@ func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error)
 		})
 		Logf("pg: векторов к пересчёту %d (батчи по %d, коммит каждые %d)", len(need), batchFor(emb), saveCommitBatch)
 	}
+	// Массовая заливка: HNSW-индекс дешевле перестроить в конце, чем платить
+	// за обновление графа на каждой вставке (оно и даёт прогрессивный тормоз).
+	bulk := len(need) > bulkThreshold
+	if bulk {
+		if _, err := s.pool.Exec(ctx, `DROP INDEX IF EXISTS `+vecIndexName(tbl)); err != nil {
+			return 0, fmt.Errorf("pg: drop vec index: %w", err)
+		}
+		defer func() {
+			// Пересоздаём даже при обрыве: без индекса VecSearch деградирует
+			// до seq scan (медленно, но корректно) — не оставляем так навсегда.
+			if ierr := s.createVecIndex(context.Background(), tbl); ierr != nil {
+				Logf("pg: не удалось пересоздать HNSW-индекс: %v", ierr)
+			}
+		}()
+	}
 
-	upsert := `INSERT INTO chunks
-		(project, id, file_path, language, start_line, end_line,
+	upsert := `INSERT INTO ` + tbl + `
+		(id, file_path, language, start_line, end_line,
 		 symbol_name, kind, signature, doc, content, hash, embedding)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-		ON CONFLICT (project, id) DO UPDATE SET
-		file_path=$3, language=$4, start_line=$5, end_line=$6,
-		symbol_name=$7, kind=$8, signature=$9, doc=$10, content=$11,
-		hash=$12, embedding=$13`
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		ON CONFLICT (id) DO UPDATE SET
+		file_path=$2, language=$3, start_line=$4, end_line=$5,
+		symbol_name=$6, kind=$7, signature=$8, doc=$9, content=$10,
+		hash=$11, embedding=$12`
 
 	batch := embedBatch
 	if emb != nil {
@@ -216,7 +346,7 @@ func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error)
 				ev = pgvector.NewVector(v)
 			}
 			if _, err := tx.Exec(ctx, upsert,
-				project, c.ID, c.FilePath, c.Language, c.StartLine, c.EndLine,
+				c.ID, c.FilePath, c.Language, c.StartLine, c.EndLine,
 				c.SymbolName, c.Kind, c.Signature, c.Doc, c.Content, c.Hash, ev); err != nil {
 				tx.Rollback(ctx)
 				return embedded, err
@@ -243,7 +373,7 @@ func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error)
 		ids[i] = c.ID
 	}
 	if _, err := tx.Exec(ctx,
-		`DELETE FROM chunks WHERE project = $1 AND id <> ALL($2)`, project, ids); err != nil {
+		`DELETE FROM `+tbl+` WHERE id <> ALL($1)`, ids); err != nil {
 		return embedded, err
 	}
 	manifest, err := json.Marshal(ix.Manifest)
@@ -261,7 +391,17 @@ func (s *PGStore) Save(ix *Index, emb PassageEmbedder) (embedded int, err error)
 			return embedded, err
 		}
 	}
-	return embedded, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return embedded, err
+	}
+	// Гарантируем наличие HNSW-индекса и на малых инкрементах (свежая БД,
+	// маленький проект): CREATE IF NOT EXISTS — no-op, если уже есть.
+	if !bulk {
+		if err := s.createVecIndex(ctx, tbl); err != nil {
+			Logf("pg: не удалось создать HNSW-индекс: %v", err)
+		}
+	}
+	return embedded, nil
 }
 
 // passageText — текст чанка для эмбеддинга: символ, сигнатура, doc, тело.
@@ -285,11 +425,11 @@ type VecHit struct {
 // VecSearch возвращает k ближайших чанков проекта по косинусной близости.
 func (s *PGStore) VecSearch(project string, vec []float32, k int) ([]VecHit, error) {
 	rows, err := s.pool.Query(context.Background(),
-		`SELECT id, 1 - (embedding <=> $2) AS sim
-		 FROM chunks
-		 WHERE project = $1 AND embedding IS NOT NULL
-		 ORDER BY embedding <=> $2
-		 LIMIT $3`, project, pgvector.NewVector(vec), k)
+		`SELECT id, 1 - (embedding <=> $1) AS sim
+		 FROM `+chunksTable(project)+`
+		 WHERE embedding IS NOT NULL
+		 ORDER BY embedding <=> $1
+		 LIMIT $2`, pgvector.NewVector(vec), k)
 	if err != nil {
 		return nil, err
 	}
@@ -308,6 +448,36 @@ func (s *PGStore) VecSearch(project string, vec []float32, k int) ([]VecHit, err
 // Load читает индекс проекта из Postgres и перестраивает модели поиска.
 func (s *PGStore) Load(project string) (*Index, error) {
 	ctx := context.Background()
+	tbl := chunksTable(project)
+	// ensureTable, чтобы свежий проект падал с понятной «не найден»,
+	// а не с «relation does not exist»
+	if err := s.ensureTable(ctx, tbl); err != nil {
+		return nil, fmt.Errorf("pg: таблица проекта: %w", err)
+	}
+	ix, err := s.readProject(ctx, project, tbl)
+	if err != nil {
+		return nil, err
+	}
+	if len(ix.Chunks) == 0 {
+		return nil, fmt.Errorf("проект %s не найден в pg-индексе; сначала: codepilot index %s --store pg", project, project)
+	}
+	ix.buildModel()
+	return ix, nil
+}
+
+// Prev возвращает сохранённое состояние проекта (чанки + манифест) без
+// построения поисковых моделей — предыдущее состояние для инкрементального
+// BuildPrev в pg-режиме. nil, если проекта в базе нет.
+func (s *PGStore) Prev(project string) *Index {
+	ix, err := s.readProject(context.Background(), project, chunksTable(project))
+	if err != nil || len(ix.Chunks) == 0 {
+		return nil
+	}
+	return ix
+}
+
+// readProject читает meta и чанки проекта из его таблицы.
+func (s *PGStore) readProject(ctx context.Context, project, tbl string) (*Index, error) {
 	ix := &Index{Manifest: map[string]string{}}
 	mrows, err := s.pool.Query(ctx,
 		`SELECT key, value FROM meta WHERE project = $1`, project)
@@ -335,7 +505,7 @@ func (s *PGStore) Load(project string) (*Index, error) {
 	}
 	crows, err := s.pool.Query(ctx, `SELECT id, file_path, language, start_line, end_line,
 		symbol_name, kind, signature, doc, content, hash
-		FROM chunks WHERE project = $1`, project)
+		FROM `+tbl)
 	if err != nil {
 		return nil, err
 	}
@@ -351,9 +521,5 @@ func (s *PGStore) Load(project string) (*Index, error) {
 	if err := crows.Err(); err != nil {
 		return nil, err
 	}
-	if len(ix.Chunks) == 0 {
-		return nil, fmt.Errorf("проект %s не найден в pg-индексе; сначала: codepilot index %s --store pg", project, project)
-	}
-	ix.buildModel()
 	return ix, nil
 }

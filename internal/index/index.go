@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -54,32 +55,110 @@ type Stats struct {
 // IndexPath — путь к файлу индекса для корня проекта.
 func IndexPath(root string) string { return filepath.Join(root, DefaultIndexName) }
 
+// maxFileBytes — потолок размера индексируемого файла: мегабайтные
+// минифицированные/сгенерированные файлы не несут пользы для поиска,
+// но надолго подвешивают токенизатор эмбеддера.
+const maxFileBytes = 1 << 20
+
+// IgnoreFileName — файл исключений в корне проекта: по шаблону на строку,
+// '#' — комментарий. Шаблон со слэшем — путь от корня ("sample_project/",
+// "docs/internal"); без слэша — имя файла или каталога на любом уровне
+// ("fixtures", "*.min.js"); хвостовой '/' — только каталоги.
+const IgnoreFileName = ".codepilotignore"
+
+type ignoreRule struct {
+	pat    string // шаблон без хвостового '/'
+	byPath bool   // содержит '/': матч от корня по префиксу пути
+	dir    bool   // хвостовой '/': только каталоги
+}
+
+func loadIgnore(root string) []ignoreRule {
+	data, err := os.ReadFile(filepath.Join(root, IgnoreFileName))
+	if err != nil {
+		return nil
+	}
+	var rules []ignoreRule
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		r := ignoreRule{dir: strings.HasSuffix(line, "/")}
+		line = strings.TrimSuffix(line, "/")
+		r.pat = line
+		r.byPath = strings.Contains(line, "/")
+		rules = append(rules, r)
+	}
+	return rules
+}
+
+// match проверяет rel-путь (slash) против правила.
+func (r ignoreRule) match(rel string, isDir bool) bool {
+	if r.dir && !isDir {
+		return false
+	}
+	if r.byPath {
+		return rel == r.pat || strings.HasPrefix(rel, r.pat+"/")
+	}
+	base := path.Base(rel)
+	if base == r.pat {
+		return true
+	}
+	ok, _ := path.Match(r.pat, base)
+	return ok
+}
+
 // SourceFiles возвращает отсортированный список индексируемых файлов (rel, slash).
 func SourceFiles(root string) ([]string, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
 	}
+	rules := loadIgnore(abs)
+	ignored := func(rel string, isDir bool) bool {
+		for _, r := range rules {
+			if r.match(rel, isDir) {
+				return true
+			}
+		}
+		return false
+	}
 	var files []string
-	err = filepath.WalkDir(abs, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(abs, func(fpath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
+		rel, err := filepath.Rel(abs, fpath)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "vendor":
+			case ".git", "node_modules", "vendor",
+				// виртуальные окружения и кэши python: там чужой код
+				// (torch в .venv даёт десятки тысяч файлов)
+				".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".tox",
+				// каталоги сборки: сгенерированный код и минифика
+				"dist", "build", "target", ".next", ".nuxt":
+				return filepath.SkipDir
+			}
+			if rel != "." && ignored(rel, true) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if _, ok := chunk.ForFile(path); !ok {
+		if ignored(rel, false) {
 			return nil
 		}
-		rel, err := filepath.Rel(abs, path)
-		if err != nil {
-			return err
+		if _, ok := chunk.ForFile(fpath); !ok {
+			return nil
 		}
-		files = append(files, filepath.ToSlash(rel))
+		if info, err := d.Info(); err == nil && info.Size() > maxFileBytes {
+			Logf("пропуск файла %s: %d байт > %d", fpath, info.Size(), maxFileBytes)
+			return nil
+		}
+		files = append(files, rel)
 		return nil
 	})
 	if err != nil {
@@ -105,15 +184,28 @@ var ErrAborted = errors.New("индексация отменена")
 
 // Build выполняет полную или инкрементальную индексацию: по manifest
 // переиндексируются только изменённые/новые файлы, удалённые выбрасываются.
-// Файл индекса читается, но не сохраняется (для этого — Save).
+// Предыдущее состояние читается из локального index.db (sqlite-режим);
+// файл индекса не сохраняется (для этого — Save).
 func Build(root string) (*Index, Stats, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, Stats{}, err
+	}
+	prev, _ := loadPrev(IndexPath(abs))
+	return BuildPrev(abs, prev)
+}
+
+// BuildPrev — Build с явным предыдущим состоянием: pg-режим передаёт сюда
+// манифест и чанки из Postgres (PGStore.Prev), иначе каждый прогон был бы
+// полным речанкингом. prev == nil — полная индексация.
+func BuildPrev(root string, prev *Index) (*Index, Stats, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, Stats{}, err
 	}
 	ix := &Index{ProjectRoot: abs, Manifest: map[string]string{}, ChunkerVersion: chunk.Version}
 	old := map[string][]chunk.Chunk{}
-	if prev, err := loadPrev(IndexPath(abs)); err == nil && prev.ChunkerVersion == chunk.Version {
+	if prev != nil && prev.ChunkerVersion == chunk.Version {
 		// версия чанкера сошлась — можно переиспользовать неизменённые файлы
 		for _, c := range prev.Chunks {
 			old[c.FilePath] = append(old[c.FilePath], c)

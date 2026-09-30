@@ -10,6 +10,10 @@ models/
 index.db*
 index.json
 mcp-calls.jsonl
+*.log
+
+# Локальная конфигурация агента (установленный скилл codepilot)
+.kimi-code/
 
 # Python-окружение офлайн-инструментов
 tools/laya-export/.venv/

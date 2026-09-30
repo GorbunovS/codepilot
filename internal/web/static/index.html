@@ -21,20 +21,29 @@
   .proj.active { background: var(--accent); }
   .proj .del { float: right; color: var(--muted); }
   .proj .del:hover { color: #000; }
+  .proj .spin { float: right; color: var(--muted); }
   .sidebar footer { border-top: 1px solid var(--border); padding: 12px; }
-  button { font: inherit; padding: 6px 12px; background: #fff; border: 1px solid #111; cursor: pointer; }
-  button:hover { background: #111; color: #fff; }
-  button.wide { width: 100%; }
+
+  /* контролы */
+  button { font: inherit; font-size: 13px; padding: 6px 12px; background: #fff; border: 1px solid #111; cursor: pointer; }
+  button:hover:not(:disabled) { background: #111; color: #fff; }
   button:disabled { opacity: .4; cursor: default; }
-  select { font: inherit; padding: 5px 8px; background: #fff; border: 1px solid #111; }
-  .hint { font-size: 11px; color: var(--muted); margin-left: 8px; }
+  button.wide { width: 100%; }
+  select { font: inherit; font-size: 13px; padding: 5px 8px; background: #fff; border: 1px solid #111; }
+  input[type=text], input[type=number] { font: inherit; font-size: 13px; padding: 6px 10px; border: 1px solid #111; background: #fff; }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .hint { font-size: 11px; color: var(--muted); }
+  .tag { font-size: 11px; padding: 2px 8px; border: 1px solid #111; }
+  .tag.ok { background: var(--accent); border-color: var(--accent); }
+  .tag.warn { background: #111; color: var(--accent); }
 
   /* контент */
   .content { flex: 1; overflow-y: auto; padding: 24px; }
   .content h2 { font-size: 18px; margin-bottom: 4px; word-break: break-all; }
   .sub { color: var(--muted); font-size: 12px; margin-bottom: 20px; }
   .empty { color: var(--muted); margin-top: 40px; text-align: center; }
-  section { margin-bottom: 28px; }
+  section { margin-bottom: 28px; max-width: 860px; }
   section h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 10px; }
   .cards { display: flex; gap: 12px; flex-wrap: wrap; }
   .card { border: 1px solid var(--border); padding: 12px 18px; min-width: 130px; }
@@ -45,12 +54,33 @@
   table { border-collapse: collapse; width: 100%; font-size: 12px; }
   th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
   th { color: var(--muted); font-weight: 600; }
-  pre.log { background: #fafafa; border: 1px solid var(--border); padding: 12px; font: 12px/1.5 ui-monospace, Menlo, monospace; max-height: 240px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+  pre.log { background: #fafafa; border: 1px solid var(--border); padding: 12px; font: 12px/1.5 ui-monospace, Menlo, monospace; max-height: 240px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin-top: 10px; }
   pre.snippet { border: 1px solid var(--border); padding: 12px; font: 12px/1.5 ui-monospace, Menlo, monospace; overflow-x: auto; }
   pre.snippet.fresh { border-color: #000; box-shadow: 0 0 0 3px var(--accent); }
-  .bar { height: 6px; background: #eee; margin: 8px 0 16px; max-width: 640px; }
+  .bar { height: 6px; background: #eee; margin: 10px 0 0; max-width: 640px; }
   .bar > div { height: 100%; background: var(--accent); transition: width .3s; }
   .err { color: #b00; font-size: 12px; }
+
+  /* языки */
+  .langs { display: flex; flex-direction: column; gap: 6px; max-width: 420px; }
+  .lang { display: grid; grid-template-columns: 90px 1fr 48px; gap: 8px; align-items: center; font-size: 12px; }
+  .lang .lbar { height: 6px; background: #eee; }
+  .lang .lbar > div { height: 100%; background: var(--accent); }
+  .lang .cnt { color: var(--muted); text-align: right; }
+
+  /* поиск */
+  .hit { border: 1px solid var(--border); margin-bottom: 8px; }
+  .hit .hd { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px; cursor: pointer; font-size: 13px; }
+  .hit .hd:hover { background: #f7f7f7; }
+  .hit .score { background: var(--accent); padding: 0 6px; font-size: 11px; font-weight: 600; }
+  .hit .loc { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .hit .sym { color: var(--muted); font-size: 12px; }
+  .hit .sig { padding: 0 12px 8px; font: 12px ui-monospace, Menlo, monospace; color: #333; word-break: break-all; }
+  .hit pre.code { border-top: 1px solid var(--border); background: #fafafa; padding: 10px 12px; font: 11px/1.5 ui-monospace, Menlo, monospace; overflow-x: auto; max-height: 300px; overflow-y: auto; white-space: pre; }
+
+  /* баннер оффлайна и ошибок JS */
+  .offline { position: sticky; top: 0; background: #111; color: var(--accent); padding: 8px 16px; font-size: 12px; z-index: 10; }
+  #jserr { position: fixed; bottom: 0; left: 0; right: 0; background: #b00; color: #fff; padding: 8px 12px; font: 12px/1.4 monospace; z-index: 9999; white-space: pre-wrap; max-height: 40vh; overflow: auto; }
 
   /* проводник */
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.3); display: flex; align-items: center; justify-content: center; }
@@ -71,6 +101,7 @@
       <div v-for="p in projects" :key="p.path" class="proj" :class="{active: p.path === selected}"
            @click="select(p.path)">
         <span class="del" title="убрать из списка" @click.stop="removeProject(p.path)">×</span>
+        <span v-if="indexingOf === p.path" class="spin">●</span>
         {{ p.path }}
       </div>
       <div v-if="!projects.length" class="proj" style="color:#999">проектов нет</div>
@@ -81,23 +112,54 @@
   </aside>
 
   <main class="content">
+    <div v-if="offline" class="offline">Потеряна связь с сервером панели. Перезапустите <code>codepilot web</code> и обновите страницу.</div>
     <div v-if="!selected" class="empty">Добавьте проект слева, чтобы начать.</div>
     <template v-else>
       <h2>{{ selected }}</h2>
-      <div class="sub">хранилище: {{ stats.store || 'sqlite' }}<template v-if="stats.index && stats.index.db_mtime"> · индекс обновлён {{ fmtTime(stats.index.db_mtime) }}</template></div>
+      <div class="sub">
+        хранилище: {{ stats.store || 'sqlite' }}
+        <template v-if="stats.index && stats.index.db_mtime"> · индекс обновлён {{ fmtTime(stats.index.db_mtime) }}</template>
+        <template v-if="layaOnnx"> · Laya ONNX</template>
+        <template v-else> · Laya: эвристика</template>
+      </div>
+
+      <section>
+        <h3>Обзор</h3>
+        <div v-if="stats.index_error" class="err">{{ stats.index_error }}</div>
+        <template v-else-if="stats.index">
+          <div class="cards">
+            <div class="card"><div class="num acc">{{ stats.index.files }}</div><div class="lbl">файлов</div></div>
+            <div class="card"><div class="num acc">{{ stats.index.chunks }}</div><div class="lbl">чанков</div></div>
+            <div class="card" v-if="stats.index.db_bytes != null"><div class="num">{{ fmtBytes(stats.index.db_bytes) }}</div><div class="lbl">index.db</div></div>
+          </div>
+          <div style="height:12px"></div>
+          <div class="langs" v-if="stats.index.languages && stats.index.languages.length">
+            <div class="lang" v-for="l in stats.index.languages" :key="l.name">
+              <span>{{ l.name }}</span>
+              <div class="lbar"><div :style="{width: langPct(l) + '%'}"></div></div>
+              <span class="cnt">{{ l.count }}</span>
+            </div>
+          </div>
+        </template>
+        <div v-else class="hint">статистика появится после индексации</div>
+      </section>
 
       <section>
         <h3>Индексация</h3>
-        <button @click="startIndex" :disabled="status.indexing">
-          {{ status.indexing ? 'Индексация…' : 'Запустить индексацию' }}
-        </button>
-        <button v-if="status.indexing" @click="cancelIndex" style="margin-left:8px">Отменить</button>
-        <select v-model="device" :disabled="status.indexing" style="margin-left:8px">
-          <option value="cpu">cpu</option>
-          <option value="coreml">coreml</option>
-          <option value="cuda">cuda</option>
-        </select>
-        <span class="hint">coreml на e5 медленнее CPU — для индексации оставляй cpu</span>
+        <div class="row">
+          <button @click="startIndex" :disabled="status.indexing">
+            {{ status.indexing ? 'Индексация…' : 'Запустить индексацию' }}
+          </button>
+          <button v-if="status.indexing" @click="cancelIndex">Отменить</button>
+          <select v-model="device" :disabled="status.indexing">
+            <option v-for="d in devices" :key="d.value" :value="d.value">{{ d.label }}</option>
+          </select>
+          <label class="row" style="gap:5px;cursor:pointer">
+            <input type="checkbox" v-model="lowCpu">
+            <span class="hint">щадящий режим (½ CPU)</span>
+          </label>
+        </div>
+        <div class="hint" style="margin-top:6px">видны только устройства, доступные в этой сборке onnxruntime</div>
         <div class="bar" v-if="status.indexing"><div style="width:100%"></div></div>
         <pre class="log" v-if="status.log && status.log.length">{{ status.log.join('\n') }}</pre>
         <div v-if="status.last_result" class="sub" :class="{err: status.last_result.startsWith('error')}" style="margin-top:8px">
@@ -105,13 +167,37 @@
         </div>
       </section>
 
-      <section v-if="stats.index || stats.index_error">
-        <h3>Статистика индекса</h3>
-        <div v-if="stats.index_error" class="err">{{ stats.index_error }}</div>
-        <div class="cards" v-else>
-          <div class="card"><div class="num acc">{{ stats.index.files }}</div><div class="lbl">файлов</div></div>
-          <div class="card"><div class="num acc">{{ stats.index.chunks }}</div><div class="lbl">чанков</div></div>
-          <div class="card" v-if="stats.index.db_bytes != null"><div class="num">{{ fmtBytes(stats.index.db_bytes) }}</div><div class="lbl">index.db</div></div>
+      <section>
+        <h3>Поиск по проекту</h3>
+        <div class="row">
+          <input type="text" v-model="search.query" placeholder="запрос, напр. «где проверяется токен»"
+                 style="flex:1;min-width:260px" @keyup.enter="runSearch">
+          <select v-model="search.mode">
+            <option v-for="m in searchModes" :key="m.value" :value="m.value" :disabled="m.disabled">{{ m.label }}</option>
+          </select>
+          <input type="number" v-model.number="search.top" style="width:64px" title="top-k" min="1" max="50">
+          <button :disabled="search.loading || !search.query.trim()" @click="runSearch">
+            {{ search.loading ? '…' : 'Найти' }}
+          </button>
+        </div>
+        <div v-if="search.error" class="err" style="margin-top:8px">{{ search.error }}</div>
+        <div v-if="search.done" style="margin-top:10px">
+          <div class="row" style="margin-bottom:8px">
+            <span class="tag" :class="search.result.need_more ? 'warn' : 'ok'">
+              {{ search.result.need_more ? 'need_more: контекста мало' : 'контекста достаточно' }}
+            </span>
+            <span class="hint">noul {{ search.result.noul.toFixed(2) }} · {{ search.result.hits.length }} хитов</span>
+          </div>
+          <div v-if="!search.result.hits.length" class="hint">ничего не найдено</div>
+          <div class="hit" v-for="(h, i) in search.result.hits" :key="i">
+            <div class="hd" @click="toggleHit(i)">
+              <span class="score">{{ h.score.toFixed(3) }}</span>
+              <span class="loc">{{ h.file_path }}:{{ h.start_line }}-{{ h.end_line }}</span>
+              <span class="sym">{{ h.kind }} {{ h.symbol_name }}</span>
+            </div>
+            <div class="sig" v-if="h.signature">{{ h.signature }}</div>
+            <pre class="code" v-if="search.expanded[i]">{{ h.content }}</pre>
+          </div>
         </div>
       </section>
 
@@ -140,11 +226,24 @@
       </section>
 
       <section>
-        <h3>MCP-конфиг для агента</h3>
+        <h3>Подключение агента</h3>
+        <div class="row" style="margin-bottom:10px">
+          <span class="tag" :class="skill.installed ? 'ok' : 'warn'">
+            {{ skill.installed ? 'скилл установлен' : 'скилл не установлен' }}
+          </span>
+          <button v-if="!skill.installed" @click="installSkill">Установить скилл в проект</button>
+          <button @click="downloadSkill">Скачать SKILL.md</button>
+          <span v-if="skill.path" class="hint">{{ skill.path }}</span>
+        </div>
+        <div class="hint" style="margin-bottom:10px">Скилл учит агента пользоваться MCP-инструментами codepilot (search_code и др.) вместо grep.</div>
         <pre class="snippet" :class="{fresh: snippetFresh}">{{ snippet }}</pre>
         <div style="height:10px"></div>
-        <button @click="copySnippet">Копировать</button>
-        <span v-if="copied" style="margin-left:10px;font-size:12px;color:var(--muted)">скопировано</span>
+        <div class="row">
+          <button @click="copySnippet">Копировать</button>
+          <button @click="installMCP">Записать .kimi-code/mcp.json</button>
+          <span v-if="copied" class="hint">скопировано</span>
+          <span v-if="mcpInstalled" class="hint">{{ mcpInstalled }}</span>
+        </div>
       </section>
     </template>
   </main>
@@ -159,7 +258,7 @@
         <div class="dir" v-if="!browser.dirs.length" style="color:#999;cursor:default">(нет подкаталогов)</div>
       </div>
       <footer>
-        <input v-model="browser.path" @keyup.enter="ls(browser.path)" placeholder="/путь/к/проекту">
+        <input v-model="browser.path" @keyup.enter="ls(browser.path)" placeholder="C:\путь\к\проекту">
         <button @click="ls(browser.path)">Перейти</button>
         <button @click="addProject(browser.path)">Выбрать этот каталог</button>
       </footer>
@@ -168,6 +267,19 @@
 </div>
 
 <script>
+// Ловушка ошибок JS: красный баннер вместо молчаливого белого экрана.
+(function () {
+  var errs = [];
+  function show(msg) {
+    errs.push(msg);
+    var b = document.getElementById('jserr');
+    if (!b) { b = document.createElement('div'); b.id = 'jserr'; document.body.appendChild(b); }
+    b.textContent = errs.join('\n');
+  }
+  window.addEventListener('error', function (e) { show(String(e.message || (e.error && e.error.stack) || e.type)); });
+  window.addEventListener('unhandledrejection', function (e) { show('promise: ' + String((e.reason && (e.reason.stack || e.reason.message)) || e.reason)); });
+})();
+
 const { createApp } = Vue;
 createApp({
   data() {
@@ -176,31 +288,75 @@ createApp({
       selected: '',
       stats: {},
       status: { indexing: false, log: [], last_result: '' },
-      device: localStorage.getItem('codepilot.device') || 'cpu',
+      devices: [{ value: 'cpu', label: 'cpu' }],
+      device: 'cpu',
+      lowCpu: localStorage.getItem('codepilot.lowCpu') === '1',
+      layaOnnx: false,
+      indexingOf: '',
       snippet: '',
       snippetFresh: false,
       copied: false,
+      mcpInstalled: '',
+      skill: { installed: false, skills_dir: false, path: '' },
+      search: { query: '', mode: 'hybrid', top: 5, loading: false, done: false, result: { hits: [], need_more: false, noul: 0 }, expanded: {}, error: '' },
+      offline: false,
       browser: { open: false, path: '', parent: '', dirs: [] },
       charts: {},
       pollTimer: null,
+      idleTimer: null,
     };
   },
-  async mounted() {
-    await this.loadProjects();
+  computed: {
+    searchModes() {
+      // Режимы реранка работают и на эвристике; суффикс показывает, какой scorer реально используется.
+      const suffix = this.layaOnnx ? 'Laya ONNX' : 'эвристика';
+      return [
+        { value: 'fts', label: 'fts — BM25' },
+        { value: 'vec', label: 'vec — TF-IDF cosine' },
+        { value: 'hybrid', label: 'hybrid — RRF' },
+        { value: 'hybrid+rerank', label: 'hybrid+rerank — ' + suffix },
+        { value: 'hybrid+blend', label: 'hybrid+blend — ' + suffix + ' + RRF' },
+      ];
+    },
   },
+  async mounted() {
+    await this.loadDevices();
+    await this.loadProjects();
+    this.idleTimer = setInterval(() => this.idleRefresh(), 4000);
+  },
+  beforeUnmount() { this.stopPoll(); clearInterval(this.idleTimer); this.destroyCharts(); },
   watch: {
-    device(v) { localStorage.setItem('codepilot.device', v); },
+    lowCpu(v) { localStorage.setItem('codepilot.lowCpu', v ? '1' : '0'); },
+    // Канвасы живут под v-else-if="stats.mcp": когда секция пропадает,
+    // Vue удаляет canvas, а живой Chart.js потом дёргает его null-контекст
+    // (Cannot read properties of null (reading 'save')). Убиваем чарты заранее.
+    'stats.mcp'(v) { if (!v) this.destroyCharts(); },
   },
   methods: {
     async api(method, url, body) {
-      const r = await fetch(url, {
-        method,
-        headers: body ? { 'Content-Type': 'application/json' } : undefined,
-        body: body ? JSON.stringify(body) : undefined,
-      });
+      let r;
+      try {
+        r = await fetch(url, {
+          method,
+          headers: body ? { 'Content-Type': 'application/json' } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+      } catch (e) {
+        this.offline = true; // сервер панели умер — дальше только баннер
+        throw e;
+      }
+      this.offline = false;
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
       return data;
+    },
+    async loadDevices() {
+      try {
+        const d = await this.api('GET', '/api/devices');
+        this.devices = d.devices || this.devices;
+        this.layaOnnx = !!d.laya_onnx;
+        if (d.current) this.device = d.current;
+      } catch (e) { /* оффлайн-баннер уже показан */ }
     },
     async loadProjects() {
       const d = await this.api('GET', '/api/projects');
@@ -210,7 +366,10 @@ createApp({
     async select(path) {
       this.selected = path;
       this.snippetFresh = false;
-      await Promise.all([this.loadStats(), this.loadStatus(), this.loadSnippet()]);
+      this.mcpInstalled = '';
+      this.search.done = false;
+      this.search.error = '';
+      await Promise.all([this.loadStats(), this.loadStatus(), this.loadSnippet(), this.loadSkillStatus()]);
     },
     async removeProject(path) {
       await this.api('DELETE', '/api/projects?path=' + encodeURIComponent(path));
@@ -227,30 +386,35 @@ createApp({
         this.browser.path = d.path;
         this.browser.parent = d.parent;
         this.browser.dirs = d.dirs || [];
-      } catch (e) { alert(e.message); }
+      } catch (e) { /* путь недоступен — остаёмся на месте */ }
     },
-    join(base, d) { return base.replace(/\/+$/, '') + '/' + d; },
+    join(base, d) { return base.replace(/[\\/]+$/, '') + '/' + d; },
     async addProject(path) {
       try {
-        await this.api('POST', '/api/projects', { path });
+        const d = await this.api('POST', '/api/projects', { path });
         this.browser.open = false;
-        await this.loadProjects();
-        this.select(path.startsWith('/') || /^[A-Za-z]:/.test(path) ? path : this.selected);
-        // после добавления выбираем именно добавленный (абсолютный путь вернул сервер)
-        const p = this.projects.find(p => p.path.endsWith(path) || p.path === path);
-        this.select(p ? p.path : this.projects[this.projects.length - 1].path);
-      } catch (e) { alert(e.message); }
+        this.projects = d.projects || this.projects;
+        // путь из проводника уже абсолютный (его вернул сервер)
+        const added = this.projects.find(p => p.path === path)
+          || this.projects[this.projects.length - 1];
+        if (added) await this.select(added.path);
+        // автозапуск индексации на сервере: сразу показываем прогресс
+        if (d.indexing) this.startPoll();
+        if (d.skill && d.skill.skills_dir && !d.skill.installed) {
+          this.skill = d.skill; // секция «Подключение агента» подсветит установку
+        }
+      } catch (e) { /* например, дубликат — сервер ответил ok */ }
     },
     async startIndex() {
       try {
-        await this.api('POST', '/api/index', { path: this.selected, device: this.device });
+        await this.api('POST', '/api/index', { path: this.selected, device: this.device, low_cpu: this.lowCpu });
         this.startPoll();
-      } catch (e) { alert(e.message); }
+      } catch (e) { /* конфликт «уже идёт» — статус подтянется поллингом */ }
     },
     async cancelIndex() {
       try {
         await this.api('POST', '/api/index/cancel', { path: this.selected });
-      } catch (e) { alert(e.message); }
+      } catch (e) { /* не идёт — игнорируем */ }
     },
     startPoll() {
       this.stopPoll();
@@ -264,11 +428,18 @@ createApp({
       }, 2000);
     },
     stopPoll() { if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; } },
+    // idleRefresh — фоновое обновление дашборда, пока проект выбран
+    // (дешёво: индекс кэширован на сервере).
+    async idleRefresh() {
+      if (!this.selected || this.offline || this.pollTimer) return;
+      try { await Promise.all([this.loadStatus(), this.loadStats()]); } catch (e) { /* оффлайн */ }
+    },
     async loadStatus() {
       if (!this.selected) return;
       this.status = await this.api('GET', '/api/status?path=' + encodeURIComponent(this.selected));
+      this.indexingOf = this.status.indexing ? this.selected : '';
       if (this.status.device && this.status.device !== this.device) {
-        this.device = this.status.device; // актуальное значение с сервера
+        this.device = this.status.device;
       }
       if (this.status.indexing && !this.pollTimer) this.startPoll();
     },
@@ -282,8 +453,56 @@ createApp({
       const d = await this.api('GET', '/api/mcp-snippet?path=' + encodeURIComponent(this.selected));
       this.snippet = d.json;
     },
+    async loadSkillStatus() {
+      if (!this.selected) return;
+      this.skill = await this.api('GET', '/api/skill/status?path=' + encodeURIComponent(this.selected));
+    },
+    async installSkill() {
+      try {
+        const d = await this.api('POST', '/api/skill/install', { path: this.selected });
+        this.skill = d.skill || this.skill;
+      } catch (e) { this.search.error = e.message; }
+    },
+    async downloadSkill() {
+      const d = await this.api('GET', '/api/skill');
+      const blob = new Blob([d.content], { type: 'text/markdown' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'SKILL.md';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    },
+    async installMCP() {
+      try {
+        const d = await this.api('POST', '/api/mcp/install', { path: this.selected });
+        this.mcpInstalled = 'записано: ' + d.path;
+      } catch (e) { this.mcpInstalled = 'ошибка: ' + e.message; }
+    },
+    async runSearch() {
+      if (!this.search.query.trim()) return;
+      this.search.loading = true;
+      this.search.error = '';
+      try {
+        const d = await this.api('POST', '/api/search', {
+          path: this.selected, query: this.search.query, mode: this.search.mode, top: this.search.top,
+        });
+        this.search.result = d;
+        this.search.expanded = {};
+        this.search.done = true;
+      } catch (e) {
+        this.search.error = e.message;
+        this.search.done = false;
+      } finally {
+        this.search.loading = false;
+      }
+    },
+    toggleHit(i) { this.search.expanded = { ...this.search.expanded, [i]: !this.search.expanded[i] }; },
+    langPct(l) {
+      const max = Math.max(...(this.stats.index.languages || []).map(x => x.count), 1);
+      return Math.round(100 * l.count / max);
+    },
     drawCharts() {
-      if (!this.stats.mcp) return;
+      if (!this.stats.mcp || typeof Chart === 'undefined') return;
       const perTool = this.stats.mcp.per_tool || {};
       this.draw('toolChart', {
         type: 'bar',
@@ -309,12 +528,18 @@ createApp({
       if (this.charts[ref]) this.charts[ref].destroy();
       this.charts[ref] = new Chart(el, cfg);
     },
+    destroyCharts() {
+      for (const k in this.charts) {
+        try { this.charts[k].destroy(); } catch (e) { /* чарт уже мёртв */ }
+      }
+      this.charts = {};
+    },
     async copySnippet() {
       try {
         await navigator.clipboard.writeText(this.snippet);
         this.copied = true;
         setTimeout(() => (this.copied = false), 1500);
-      } catch (e) { alert(e.message); }
+      } catch (e) { /* буфер недоступен */ }
     },
     fmtTime(ts) { return ts ? new Date(ts).toLocaleString() : ''; },
     fmtBytes(n) {

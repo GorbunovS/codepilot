@@ -255,17 +255,53 @@ Git post-commit hook — `scripts/post-commit` (скопировать в `.git/
 ## Продолжение работы на Windows (без MLX)
 
 MLX-сайдкар — только Apple Silicon. Дома на Windows используй локальный ONNX
-для эмбеддингов (или TF-IDF/SQLite, если модель не нужна):
+для эмбеддингов (или TF-IDF/SQLite, если модель не нужна).
+
+### DirectML — для любой DX12-видеокарты (рекомендуемый)
+
+Рекомендуемый способ на Windows с NVIDIA/AMD/Intel — **ONNX Runtime + DirectML**:
+не требует CUDA Toolkit/cuDNN, достаточно положить несколько DLL рядом с бинарем.
 
 ```powershell
 # PowerShell
-# 1. onnxruntime в bin/onnxruntime.dll (или путь через CODEPILOT_ONNXRUNTIME_DLL)
+# 1. Скачать ONNX Runtime + DirectML в bin/
+.\scripts\download_ort_directml.ps1
+
+# 2. Собрать CLI
 go build -o codepilot.exe ./cmd/codepilot
-./codepilot.exe index C:\Users\you\pnodes --store pg --embed onnx
-./codepilot.exe web --addr 127.0.0.1:8080 --store pg --embed onnx --laya onnx
-# панель ищет тот же проект по тому же абсолютному пути
+
+# 3. Поднять Postgres+pgvector
+docker compose up -d db
+
+# 4. Проиндексировать проект
+.\codepilot.exe index C:\Users\you\pnodes --store pg --embed onnx --device directml
+
+# 5. Запустить веб-панель
+.\codepilot.exe web --addr 127.0.0.1:8080 --store pg --embed onnx --device directml --laya onnx
 ```
 
-Postgres для pg-режима — `docker compose up -d db` через WSL2 или локальный
-Postgres с pgvector. Проекты и история прогонов живут в `%USERPROFILE%\.codepilot`
+**Особенность:** Laya zero-shot не совместима с DirectML EP (падает на `Reshape`),
+поэтому при `--laya onnx --device directml` Laya автоматически исполняется на CPU,
+а e5-small — на DirectML/GPU. Основная нагрузка (индексация) всё равно уходит на GPU.
+
+### CUDA — для NVIDIA GPU (максимум скорости)
+
+Если хочешь, чтобы и e5, и Laya работали на NVIDIA GPU, используй `CUDAExecutionProvider`.
+Для него нужно установить **CUDA Toolkit 11.8 + cuDNN 8.x** и убедиться, что их DLL
+в PATH.
+
+```powershell
+# 1. ONNX Runtime с CUDA EP
+.\scripts\download_ort_cuda.ps1
+
+# 2. Индексация и панель на CUDA
+.\codepilot.exe index C:\Users\you\pnodes --store pg --embed onnx --device cuda
+.\codepilot.exe web --addr 127.0.0.1:8080 --store pg --embed onnx --device cuda --laya onnx
+```
+
+### Без GPU
+
+Если видеокарты нет, используй `--device cpu`.
+
+Проекты и история прогонов живут в `%USERPROFILE%\.codepilot`
 (Windows-эквивалент `~/.codepilot`).

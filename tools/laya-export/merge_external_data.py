@@ -17,8 +17,10 @@ import onnx
 
 def main() -> None:
     model_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "models/laya-multilingual")
-    src = model_dir / "laya.onnx"
-    dst = model_dir / "laya.single.onnx"
+    src_name = sys.argv[2] if len(sys.argv) > 2 else "laya.onnx"
+    dst_name = sys.argv[3] if len(sys.argv) > 3 else "laya.single.onnx"
+    src = model_dir / src_name
+    dst = model_dir / dst_name
     if not src.exists():
         sys.exit(f"нет {src}")
     print(f"загружаю {src} (+ внешние веса)...")

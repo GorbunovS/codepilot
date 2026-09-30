@@ -11,7 +11,9 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"codepilot/internal/ortlib"
 
@@ -43,7 +45,7 @@ type Embedder struct {
 // Skipped — сколько текстов было заменено пустыми из-за паники токенизатора.
 func (e *Embedder) Skipped() int { return e.skipped }
 
-// ProvidersForDevice мапит --device (cpu|coreml|cuda) в имена провайдеров
+// ProvidersForDevice мапит --device (cpu|coreml|cuda|directml) в имена провайдеров
 // onnxruntime. cpu и пустая строка — дефолт (CPUExecutionProvider).
 func ProvidersForDevice(device string) ([]string, error) {
 	switch device {
@@ -53,8 +55,10 @@ func ProvidersForDevice(device string) ([]string, error) {
 		return []string{"CoreMLExecutionProvider"}, nil
 	case "cuda":
 		return []string{"CUDAExecutionProvider"}, nil
+	case "directml":
+		return []string{"DmlExecutionProvider"}, nil
 	default:
-		return nil, fmt.Errorf("неизвестное устройство %q (cpu|coreml|cuda)", device)
+		return nil, fmt.Errorf("неизвестное устройство %q (cpu|coreml|cuda|directml)", device)
 	}
 }
 
@@ -62,7 +66,8 @@ func ProvidersForDevice(device string) ([]string, error) {
 // Нативная библиотека onnxruntime ищется через ortlib.Find(dir).
 // providers — желаемые execution providers (напр. CoreMLExecutionProvider);
 // если запрошенного нет в сборке onnxruntime — предупреждение в stderr и CPU.
-func Load(dir string, providers ...string) (*Embedder, error) {
+// threads > 0 ограничивает число потоков инференса (IntraOpNumThreads).
+func Load(dir string, threads int, providers ...string) (*Embedder, error) {
 	tokPath := filepath.Join(dir, "tokenizer.json")
 	if _, err := os.Stat(tokPath); err != nil {
 		return nil, fmt.Errorf("embed: tokenizer.json не найден в %s: %w", dir, err)
@@ -88,7 +93,7 @@ func Load(dir string, providers ...string) (*Embedder, error) {
 		rt.Close()
 		return nil, fmt.Errorf("embed: ORT env: %w", err)
 	}
-	sess, err := rt.NewSession(env, onnxPath, SessionOptions(rt, providers))
+	sess, err := rt.NewSession(env, onnxPath, SessionOptions(rt, providers, threads))
 	if err != nil {
 		env.Close()
 		rt.Close()
@@ -97,33 +102,55 @@ func Load(dir string, providers ...string) (*Embedder, error) {
 	return &Embedder{rt: rt, env: env, session: sess, tok: tk}, nil
 }
 
+// AvailableProviders возвращает execution providers установленной onnxruntime
+// (пустой срез, если библиотека не найдена или не загрузилась). Библиотека
+// поднимается временно и сразу закрывается — для опроса возможностей машины.
+func AvailableProviders() []string {
+	libPath := ortlib.Find("")
+	if libPath == "" {
+		return nil
+	}
+	rt, err := ort.NewRuntime(libPath, ortAPIVersion)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = rt.Close() }()
+	avail, err := rt.GetAvailableProviders()
+	if err != nil {
+		return nil
+	}
+	return avail
+}
+
 // SessionOptions собирает ort.SessionOptions под запрошенные провайдеры.
 // Если провайдера нет в сборке onnxruntime — предупреждение и fallback на CPU
 // (onnxruntime сам докинет CPUExecutionProvider в конец списка).
-func SessionOptions(rt *ort.Runtime, providers []string) *ort.SessionOptions {
-	if len(providers) == 0 {
-		return nil
-	}
-	avail, err := rt.GetAvailableProviders()
-	if err == nil {
-		set := map[string]bool{}
-		for _, p := range avail {
-			set[p] = true
-		}
-		filtered := providers[:0]
-		for _, p := range providers {
-			if set[p] {
-				filtered = append(filtered, p)
-			} else {
-				fmt.Fprintf(os.Stderr, "ort: провайдер %s недоступен в этой сборке onnxruntime (есть: %v), использую CPU\n", p, avail)
+// threads > 0 ограничивает IntraOpNumThreads (щадящий режим для слабых CPU);
+// 0 — дефолт onnxruntime (все ядра). Без провайдеров и лимита потоков
+// возвращает nil (дефолтные опции).
+func SessionOptions(rt *ort.Runtime, providers []string, threads int) *ort.SessionOptions {
+	if len(providers) > 0 {
+		avail, err := rt.GetAvailableProviders()
+		if err == nil {
+			set := map[string]bool{}
+			for _, p := range avail {
+				set[p] = true
 			}
+			filtered := providers[:0]
+			for _, p := range providers {
+				if set[p] {
+					filtered = append(filtered, p)
+				} else {
+					fmt.Fprintf(os.Stderr, "ort: провайдер %s недоступен в этой сборке onnxruntime (есть: %v), использую CPU\n", p, avail)
+				}
+			}
+			providers = filtered
 		}
-		providers = filtered
 	}
-	if len(providers) == 0 {
+	if len(providers) == 0 && threads <= 0 {
 		return nil
 	}
-	return &ort.SessionOptions{ExecutionProviders: providers}
+	return &ort.SessionOptions{ExecutionProviders: providers, IntraOpNumThreads: threads}
 }
 
 // Close освобождает сессию, окружение и runtime.
@@ -245,7 +272,19 @@ func (e *Embedder) embedPrefixed(prefix string, texts []string) ([][]float32, er
 // «ядовитых» входах (напр. Metaspace: slice bounds out of range на экзотике
 // юникода). Такой текст заменяется пустым — вектор получается нулевым,
 // но индексация проекта продолжается.
+// maxEmbedBytes — потолок текста перед токенизацией. Модель всё равно
+// обрезает вход до MaxTokens (512) токенов, поэтому эмбеддинг текста длиннее
+// нескольких килобайт — чистая трата времени токенизатора (BPE на
+// мегабайтных строках из сгенерированных файлов работает минутами).
+const maxEmbedBytes = 8192
+
 func (e *Embedder) encodeSafe(text string) (ids []int, err error) {
+	if len(text) > maxEmbedBytes {
+		// режем по границе руны, чтобы не скармливать битый UTF-8
+		text = strings.TrimRightFunc(text[:maxEmbedBytes], func(r rune) bool {
+			return r == utf8.RuneError
+		})
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			e.skipped++

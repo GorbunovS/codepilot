@@ -105,9 +105,11 @@ type Model struct {
 
 	clsID, sepID, maskID, padID int64
 	maskTok                     string
+	vocabSize                   int64 // размер словаря с added_tokens (для валидации id)
 
 	mu       sync.Mutex // tokenizer и session не потокобезопасны
 	warnOnce sync.Once
+	skipped  int // текстов с паникой/мусором токенизатора (см. encode)
 }
 
 var _ Scorer = (*Model)(nil)
@@ -117,7 +119,8 @@ var _ index.Scorer = (*Model)(nil)
 // Нативная библиотека onnxruntime ищется через ortlib.Find
 // ($CODEPILOT_ONNXRUNTIME_DLL, modelDir, bin/, системные пути).
 // providers — желаемые execution providers (см. embed.ProvidersForDevice).
-func Load(modelDir string, providers ...string) (*Model, error) {
+// threads > 0 ограничивает число потоков инференса (IntraOpNumThreads).
+func Load(modelDir string, threads int, providers ...string) (*Model, error) {
 	cfg, err := loadConfig(modelDir)
 	if err != nil {
 		return nil, err
@@ -150,7 +153,7 @@ func Load(modelDir string, providers ...string) (*Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("laya: tokenizer.json: %w", err)
 	}
-	m := &Model{tok: tk, cfg: cfg}
+	m := &Model{tok: tk, cfg: cfg, vocabSize: int64(tk.GetVocabSize(true))}
 	if err := m.resolveSpecialTokens(tokPath); err != nil {
 		return nil, err
 	}
@@ -166,7 +169,7 @@ func Load(modelDir string, providers ...string) (*Model, error) {
 		return nil, fmt.Errorf("laya: ORT env: %w", err)
 	}
 	m.env = env
-	sess, err := rt.NewSession(env, onnxPath, embed.SessionOptions(rt, providers))
+	sess, err := rt.NewSession(env, onnxPath, embed.SessionOptions(rt, providers, threads))
 	if err != nil {
 		env.Close()
 		rt.Close()
@@ -256,14 +259,36 @@ func (m *Model) resolveSpecialTokens(tokPath string) error {
 }
 
 // encode токенизирует текст без спецтокенов (соответствует add_special_tokens=False).
-func (m *Model) encode(text string) ([]int64, error) {
+// sugarme/tokenizer может паниковать или вернуть мусорные id на экзотике
+// юникода — panic ловится, id вне словаря заменяются на PAD, иначе ORT падает
+// на Gather (indices out of bounds) и роняет весь поиск. Счётчик таких текстов — skipped.
+func (m *Model) encode(text string) (ids []int64, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			m.skipped++
+			fmt.Fprintf(os.Stderr, "laya: паника токенизатора на тексте %d байт, фрагмент пропущен: %v\n", len(text), r)
+			ids = nil
+			err = nil
+		}
+	}()
 	enc, err := m.tok.EncodeSingle(text, false)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]int64, len(enc.Ids))
+	vocab := m.vocabSize
+	ids = make([]int64, len(enc.Ids))
+	bad := 0
 	for i, id := range enc.Ids {
-		ids[i] = int64(id)
+		v := int64(id)
+		if v < 0 || v >= vocab {
+			v = m.padID
+			bad++
+		}
+		ids[i] = v
+	}
+	if bad > 0 {
+		m.skipped++
+		fmt.Fprintf(os.Stderr, "laya: %d мусорных id токенизатора на тексте %d байт заменены на PAD\n", bad, len(text))
 	}
 	return ids, nil
 }
@@ -701,7 +726,8 @@ func (m *Model) Noul(query string, top []index.SearchHit) float64 {
 // Пустой kind читается из CODEPILOT_LAYA. При любой ошибке загрузки ONNX —
 // предупреждение в stderr и graceful fallback на Heuristic.
 // providers — желаемые execution providers (см. embed.ProvidersForDevice).
-func Resolve(kind, modelDir string, providers ...string) Scorer {
+// threads > 0 ограничивает число потоков инференса (IntraOpNumThreads).
+func Resolve(kind, modelDir string, threads int, providers ...string) Scorer {
 	if kind == "" {
 		kind = os.Getenv("CODEPILOT_LAYA")
 	}
@@ -715,7 +741,16 @@ func Resolve(kind, modelDir string, providers ...string) Scorer {
 	if modelDir == "" {
 		modelDir = "models/laya-multilingual"
 	}
-	m, err := Load(modelDir, providers...)
+	// DirectML EP не переваривает reshape/dynamic shapes в текущей ONNX-модели Laya;
+	// e5-small на DirectML работает, поэтому для Laya fallback на CPU без отказа всего поиска.
+	for i, p := range providers {
+		if p == "DmlExecutionProvider" {
+			fmt.Fprintf(os.Stderr, "warning: Laya не совместима с DirectML EP, использую CPU для слоя решений\n")
+			providers = append(providers[:i], providers[i+1:]...)
+			break
+		}
+	}
+	m, err := Load(modelDir, threads, providers...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: laya onnx недоступна (%v); fallback на heuristic\n", err)
 		return Heuristic{}

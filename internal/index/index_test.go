@@ -79,3 +79,65 @@ func TestReadSpan(t *testing.T) {
 		t.Errorf("ReadSpan clamp: %q", got)
 	}
 }
+
+// TestSourceFilesSkips — walker пропускает служебные каталоги (.venv, build,
+// node_modules и т.п.) и файлы крупнее maxFileBytes.
+func TestSourceFilesSkips(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, size int) {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, make([]byte, size), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("main.go", 64)
+	write(".venv/lib/site-packages/torch/big.py", 64)
+	write("build/out/app.js", 64)
+	write("node_modules/dep/index.js", 64)
+	write("minified.js", maxFileBytes+1)
+
+	files, err := SourceFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0] != "main.go" {
+		t.Fatalf("SourceFiles = %v, ожидался только main.go", files)
+	}
+}
+
+// TestCodepilotIgnore — .codepilotignore исключает каталоги от корня,
+// имена на любом уровне и glob по имени файла.
+func TestCodepilotIgnore(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string) {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("package x\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("main.go")
+	write("sample_project/demo.go")
+	write("docs/internal/notes.go")
+	write("fixtures/data.go")
+	write("web/app.min.js")
+	if err := os.WriteFile(filepath.Join(dir, IgnoreFileName), []byte(
+		"# демо-репозиторий\nsample_project/\ndocs/internal\nfixtures\n*.min.js\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := SourceFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// web/app.min.js выкинут glob'ом, .codepilotignore не индексируется
+	// (нет чанкера) — остаётся только main.go
+	if len(files) != 1 || files[0] != "main.go" {
+		t.Fatalf("SourceFiles = %v, ожидался только main.go", files)
+	}
+}

@@ -1,0 +1,4 @@
+# демо-репозиторий для eval/bench — в поиске по codePlain не нужен
+sample_project/
+# исходники чекпоинта Laya с HF — не код проекта
+models/

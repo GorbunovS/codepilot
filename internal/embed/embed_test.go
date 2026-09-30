@@ -49,12 +49,30 @@ func testEmbedder(t *testing.T) *Embedder {
 	if ortlib.Find(dir) == "" {
 		t.Skip("нативная onnxruntime не найдена (bin/ или " + ortlib.EnvVar + ")")
 	}
-	e, err := Load(dir)
+	e, err := Load(dir, 0)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	t.Cleanup(e.Close)
 	return e
+}
+
+func TestSessionOptionsThreads(t *testing.T) {
+	// без провайдеров и без ограничения потоков — nil (дефолты onnxruntime)
+	if got := SessionOptions(nil, nil, 0); got != nil {
+		t.Fatalf("SessionOptions(nil, nil, 0) = %+v, ожидался nil", got)
+	}
+	// threads задают IntraOpNumThreads даже без провайдеров и без runtime
+	got := SessionOptions(nil, nil, 4)
+	if got == nil {
+		t.Fatal("SessionOptions(nil, nil, 4) = nil")
+	}
+	if got.IntraOpNumThreads != 4 {
+		t.Fatalf("IntraOpNumThreads = %d, ожидалось 4", got.IntraOpNumThreads)
+	}
+	if len(got.ExecutionProviders) != 0 {
+		t.Fatalf("ExecutionProviders = %v, ожидался пустой список", got.ExecutionProviders)
+	}
 }
 
 func cos(a, b []float32) float64 {
