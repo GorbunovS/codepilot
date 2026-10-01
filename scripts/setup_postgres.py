@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import platform
@@ -143,9 +144,13 @@ def setup_windows():
     env["PGPASSWORD"] = DB_PASS
     env["PATH"] = str(pg_bin("psql").parent) + os.pathsep + env.get("PATH", "")
 
+    # В Windows-бинарниках от enterprisedb суперпользователь = текущий
+    # Windows-пользователь (не postgres), поэтому подключаемся от его имени.
+    pg_superuser = getpass.getuser()
+
     def psql(args, db="postgres"):
         subprocess.run(
-            [str(pg_bin("psql")), "-h", "127.0.0.1", "-p", PORT, "-U", "postgres", "-d", db, "-c", args],
+            [str(pg_bin("psql")), "-h", "127.0.0.1", "-p", PORT, "-U", pg_superuser, "-d", db, "-c", args],
             check=True,
             env=env,
         )
