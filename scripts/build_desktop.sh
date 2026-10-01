@@ -9,9 +9,27 @@ cd "$(dirname "$0")/.."
 ADDR="${ADDR:-127.0.0.1:8080}"
 APP_NAME="${APP_NAME:-CodePilot}"
 APP="${APP_NAME}.app"
+ICON="logo.icns"
 
 # 1. Собираем CLI.
 go build -o codepilot ./cmd/codepilot
+
+# 1.5. Генерируем macOS-иконку из logo.png.
+if [[ -f logo.png ]]; then
+  echo "Генерирую $ICON из logo.png..."
+  ICONSET=".tmp.logo.iconset"
+  rm -rf "$ICONSET"
+  mkdir -p "$ICONSET"
+  for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" logo.png --out "$ICONSET/icon_${size}x${size}.png" >/dev/null 2>&1
+    sips -z "$((size*2))" "$((size*2))" logo.png --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null 2>&1
+  done
+  iconutil -c icns "$ICONSET" -o "$ICON"
+  rm -rf "$ICONSET"
+else
+  echo "WARNING: logo.png не найден, иконка будет стандартной Pake"
+  ICON=""
+fi
 
 # 2. Поднимаем панель на момент сборки Pake (Pake ходит за иконкой/метаданными).
 ./codepilot web --addr "$ADDR" &
@@ -28,10 +46,16 @@ for i in $(seq 1 120); do
 done
 
 # 4. Собираем Pake-обёртку.
-pnpm dlx pake-cli "http://${ADDR}" \
-  --name "$APP_NAME" \
-  --width 1280 \
+PAKE_ARGS=(
+  "http://${ADDR}"
+  --name "$APP_NAME"
+  --width 1280
   --height 840
+)
+if [[ -n "$ICON" && -f "$ICON" ]]; then
+  PAKE_ARGS+=(--icon "$ICON")
+fi
+pnpm dlx pake-cli "${PAKE_ARGS[@]}"
 
 # 5. Останавливаем временную панель.
 cleanup_web
