@@ -6,9 +6,10 @@
 #   chmod +x <repo>/.git/hooks/post-commit
 #
 # CODEPILOT — путь к бинарю (по умолчанию ищется в PATH).
-# Индекс пишется в <repo>/index.db (SQLite); сбой индексации не отменяет коммит.
+# CODEPILOT_FLAGS — дополнительные флаги для codepilot index (по умолчанию пусто).
+# Сбой индексации не отменяет коммит.
 
 CODEPILOT=${CODEPILOT:-codepilot}
 ROOT=$(git rev-parse --show-toplevel) || exit 0
-"$CODEPILOT" index "$ROOT" >/dev/null 2>&1 || true
+"$CODEPILOT" index $CODEPILOT_FLAGS "$ROOT" >/dev/null 2>&1 || true
 exit 0
