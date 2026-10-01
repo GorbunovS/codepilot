@@ -63,7 +63,7 @@ def ensure_go() -> Path:
 
     print("Go не найден в PATH. Скачиваю portable Go...")
     import tempfile, zipfile
-    version = "1.23.2"
+    version = "1.26.0"
     tmp = Path(tempfile.gettempdir())
     zip_path = tmp / f"go{version}.windows-amd64.zip"
     if not zip_path.exists():
@@ -91,6 +91,8 @@ def ensure_codepilot():
     go = ensure_go()
     env = os.environ.copy()
     env["CGO_ENABLED"] = "0"
+    env["GOTOOLCHAIN"] = "local"
+    env.setdefault("GOPROXY", "https://proxy.golang.org,direct")
     run([go, "build", "-o", "codepilot.exe", "./cmd/codepilot"], cwd=ROOT, env=env)
 
 
