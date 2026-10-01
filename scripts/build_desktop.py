@@ -133,23 +133,42 @@ def build_launcher_exe(args):
     if target_os(args) != "Windows":
         return
     out = out_dir(args)
-    try:
-        subprocess.run(["pyinstaller", "--version"], capture_output=True, check=True)
-    except Exception:
-        print("PyInstaller не найден — пропускаю сборку CodePilot.exe")
-        return
 
-    print("Собираю CodePilot.exe через PyInstaller...")
-    run([
-        "pyinstaller",
-        "--onefile",
-        "--windowed",
-        "--name", "CodePilot",
-        "--distpath", str(out),
-        "--workpath", str(out / "build"),
-        "--specpath", str(out),
-        str(out / "launcher.py"),
-    ], cwd=ROOT)
+    # PyInstaller умеет собирать .exe только на Windows. На маке/Linux
+    # делаем CodePilot.bat + CodePilot.vbs, которые запускают launcher.py.
+    if NATIVE_OS == "Windows":
+        pyinstaller = [sys.executable, "-m", "PyInstaller"]
+        try:
+            subprocess.run(pyinstaller + ["--version"], capture_output=True, check=True)
+        except Exception:
+            print("PyInstaller не найден — пропускаю сборку CodePilot.exe")
+            return
+        print("Собираю CodePilot.exe через PyInstaller...")
+        run(pyinstaller + [
+            "--onefile",
+            "--windowed",
+            "--name", "CodePilot",
+            "--distpath", str(out),
+            "--workpath", str(out / "build"),
+            "--specpath", str(out),
+            str(out / "launcher.py"),
+        ], cwd=ROOT)
+    else:
+        print("Создаю CodePilot.bat / CodePilot.vbs (кросс-сборка на маке/Linux)...")
+        bat = out / "CodePilot.bat"
+        bat.write_text(
+            '@echo off\n'
+            'cd /d "%~dp0"\n'
+            'pythonw launcher.py\n',
+            encoding="utf-8",
+        )
+        vbs = out / "CodePilot.vbs"
+        vbs.write_text(
+            'Set WshShell = CreateObject("WScript.Shell")\n'
+            'WshShell.CurrentDirectory = Left(WScript.ScriptFullName, InStrRev(WScript.ScriptFullName, "\\") - 1)\n'
+            'WshShell.Run "pythonw launcher.py", 0, False\n',
+            encoding="utf-8",
+        )
 
 
 def build_installer(args):
@@ -162,7 +181,12 @@ def build_installer(args):
         return
 
     print("Собираю CodePilot-Setup.exe через NSIS...")
-    run(["makensis", str(ROOT / "scripts" / "codepilot.nsi")], cwd=ROOT)
+    run([
+        "makensis",
+        f"-DINST_SOURCE={out_dir(args).resolve()}",
+        f"-DOUTFILE={(ROOT / 'CodePilot-Setup.exe').resolve()}",
+        str(ROOT / "scripts" / "codepilot.nsi"),
+    ], cwd=ROOT)
 
 
 def main():
