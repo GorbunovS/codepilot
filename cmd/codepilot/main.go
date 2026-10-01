@@ -73,31 +73,28 @@ func usage() {
   codepilot bench               расход токенов: baseline (grep+read) vs RAG
   codepilot web                 локальная веб-панель (десктоп-обёртка — Pake)
 
-Флаги search: --project . --mode hybrid+rerank --top 5 --content [--laya onnx]
+Флаги search: --project . --top 5 --content
 Флаги serve:  без --project — мультипроектный демон (настройки из
   ~/.codepilot/config.json, проекты из projects.json, проект выбирается
   аргументом project инструментов); --project . — однопроектный режим
-  (совместимость); --log mcp-calls.jsonl [--laya onnx]
-Флаги eval:   --project sample_project --dataset eval/golden_dataset.json [--laya onnx]
-Флаги bench:  --project sample_project --dataset eval/golden_dataset.json [--laya onnx]
-Флаги web:    --addr 127.0.0.1:8080 --log mcp-calls.jsonl [хранилище, --laya]
+  (совместимость); --log mcp-calls.jsonl
+Флаги eval:   --project sample_project --dataset eval/golden_dataset.json
+Флаги bench:  --project sample_project --dataset eval/golden_dataset.json
+Флаги web:    --addr 127.0.0.1:8080 --log mcp-calls.jsonl
 
-Хранилище: --store sqlite (по умолчанию) | --store pg (Postgres+pgvector,
-  --pg-dsn, --embed onnx [--embed-dir models/e5-small]).
-  Переменные: CODEPILOT_STORE, CODEPILOT_PG_DSN, CODEPILOT_EMBED.
-  --embed-server URL — эмбеддинги через MLX-сайдкар (tools/mlx-sidecar/run.sh)
-  вместо локального ONNX (CODEPILOT_EMBED_SERVER).
+Хранилище: --store pg (по умолчанию) | --store sqlite.
+  Переменные: CODEPILOT_STORE, CODEPILOT_PG_DSN.
+Эмбеддер: --embed onnx (по умолчанию) | --embed-server URL (MLX-сайдкар).
+  Переменные: CODEPILOT_EMBED, CODEPILOT_EMBED_SERVER.
 
 Устройство инференса: --device cpu (по умолчанию) | coreml | cuda | directml
   (CODEPILOT_DEVICE); если провайдера нет в сборке onnxruntime — fallback на CPU.
   --max-threads N (CODEPILOT_MAX_THREADS) — лимит потоков инференса ONNX
   (0 — все ядра); щадящий режим для слабых CPU.
 
-Слой решений Laya: --laya heuristic (по умолчанию) | --laya onnx
+Слой решений Laya: --laya onnx (по умолчанию) | --laya heuristic
   [--laya-dir models/laya-multilingual]; также читается CODEPILOT_LAYA.
-Режимы поиска: fts (BM25), vec (TF-IDF cosine; в pg-режиме — e5+pgvector),
-hybrid (RRF k=60), hybrid+rerank (порядок задаёт Laya), hybrid+blend
-(0.5·Laya + 0.5·RRF).
+Поиск всегда выполняется в режиме hybrid+rerank с Laya.
 `)
 }
 

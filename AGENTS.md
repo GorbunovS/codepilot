@@ -19,7 +19,7 @@ go build -o codepilot ./cmd/codepilot   # бинарь CLI
 go vet ./... && go test ./internal/...  # проверки (тесты: chunk, index/tokenize, инкремент)
 
 ./codepilot index <path>               # индексация (инкремент по sha256-манифесту)
-./codepilot search "запрос" --project <path> --mode hybrid+rerank --top 5 [--content]
+./codepilot search "запрос" --project <path> --top 5 [--content]
 ./codepilot serve                      # MCP-демон на все проекты из ~/.codepilot/projects.json (без флагов)
 ./codepilot serve --project <path>     # однопроектный MCP (совместимость), лог вызовов в mcp-calls.jsonl
 ./codepilot eval [--laya onnx]         # Recall@k/MRR по eval/golden_dataset.json

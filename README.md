@@ -14,7 +14,7 @@ go build ./...
 go build -o codepilot ./cmd/codepilot
 
 ./codepilot index sample_project        # индексация (повторный запуск — no-op)
-./codepilot search "где проверяется токен" --mode hybrid+rerank --top 5
+./codepilot search "где проверяется токен" --top 5
 ./codepilot serve --project sample_project   # MCP stdio-сервер
 ./codepilot eval                        # метрики по eval/golden_dataset.json
 ./codepilot bench                       # сравнение токенов baseline vs RAG
@@ -75,20 +75,21 @@ internal/bench/         сравнение токенов baseline vs RAG
 
 ## Векторный режим: Postgres + pgvector + e5 (Docker)
 
-По умолчанию индекс живёт в `<path>/index.db` (SQLite), а «векторный» поиск —
-TF-IDF в памяти. Режим `--store pg` — настоящая векторная БД: чанки и векторы
+Режим `--store pg` — настоящая векторная БД: чанки и векторы
 `multilingual-e5-small` (ONNX, 384 dim, fp32) в Postgres + pgvector (HNSW),
 BM25 по-прежнему строится в памяти. Один Postgres обслуживает несколько
 проектов (ключ — абсолютный путь корня).
 
 ```bash
 ./scripts/download_models.sh      # один раз: e5-small ONNX (~470 МБ)
-docker compose up -d db           # Postgres + pgvector
-docker compose build app          # codepilot + onnxruntime для linux
+docker compose up -d                # Postgres + pgvector + веб-панель
+# открыть http://localhost:8080
+
+# CLI-операции внутри контейнера
 docker compose run --rm app index sample_project
 docker compose run --rm app eval
 docker compose run --rm app bench
-docker compose run --rm app search "запрос" --project sample_project --mode vec
+docker compose run --rm app search "запрос" --project sample_project
 docker compose run --rm -T app serve --project sample_project   # MCP по stdio
 ```
 
@@ -97,7 +98,7 @@ docker compose run --rm -T app serve --project sample_project   # MCP по stdio
 
 ```bash
 ./codepilot index sample_project --store pg --embed onnx
-./codepilot search "запрос" --project sample_project --store pg --embed onnx --mode vec
+./codepilot search "запрос" --project sample_project --store pg --embed onnx
 ```
 
 Переменные окружения: `CODEPILOT_STORE`, `CODEPILOT_PG_DSN`, `CODEPILOT_EMBED`.
@@ -152,7 +153,7 @@ Recall@1 без всякой Laya; индексация sample_project — ~16 �
 tools/mlx-sidecar/run.sh   # venv в tools/mlx-sidecar/.venv, модель докачается при первом старте
 ./codepilot index sample_project --store pg --embed-server http://127.0.0.1:8081
 ./codepilot search "запрос" --project sample_project --store pg \
-    --embed-server http://127.0.0.1:8081 --mode vec
+    --embed-server http://127.0.0.1:8081
 ```
 
 Векторы совместимы с ONNX-пайплайном (паритет cos ≈ 0.99), размерность

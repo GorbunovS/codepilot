@@ -1,12 +1,17 @@
-# Стенд codepilot: Postgres+pgvector + CLI (index/search/eval/bench/serve).
+# Стенд codepilot: Postgres+pgvector + веб-панель.
 #
-#   ./scripts/download_models.sh                 # один раз: e5-small
-#   docker compose up -d db                      # поднять БД
-#   docker compose build app                     # собрать CLI
+# Одной командой поднять всё:
+#   docker compose up -d
+#   # открыть http://localhost:8080
+#
+# CLI-операции внутри контейнера:
 #   docker compose run --rm app index sample_project
 #   docker compose run --rm app eval
 #   docker compose run --rm app search "запрос" --project sample_project
-#   docker compose run --rm -T app serve --project sample_project   # MCP (stdio)
+#   docker compose run --rm -T app serve --project sample_project   # MCP stdio
+#
+# Модели (~2.5 ГБ) не входят в образ: монтируются из ./models.
+# Конфиг и реестр проектов сохраняются в ~/.codepilot на хосте.
 services:
   db:
     image: pgvector/pgvector:pg17
@@ -24,6 +29,32 @@ services:
       timeout: 3s
       retries: 20
 
+  web:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      CODEPILOT_STORE: pg
+      CODEPILOT_PG_DSN: postgres://codepilot:codepilot@db:5432/codepilot?sslmode=disable
+      CODEPILOT_EMBED: onnx
+      CODEPILOT_ONNXRUNTIME_DLL: /usr/local/lib/libonnxruntime.so
+      HOME: /tmp/home   # для хранения ~/.codepilot внутри volume
+    volumes:
+      - codepilot-home:/tmp/home
+      - ./models:/work/models:ro
+      - ./sample_project:/work/sample_project
+      - ./eval:/work/eval
+      - ./mcp-calls.jsonl:/work/mcp-calls.jsonl
+    command: ["web", "--addr", "0.0.0.0:8080", "--log", "/work/mcp-calls.jsonl"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/projects || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   app:
     build: .
     depends_on:
@@ -34,11 +65,16 @@ services:
       CODEPILOT_PG_DSN: postgres://codepilot:codepilot@db:5432/codepilot?sslmode=disable
       CODEPILOT_EMBED: onnx
       CODEPILOT_ONNXRUNTIME_DLL: /usr/local/lib/libonnxruntime.so
+      HOME: /tmp/home
     volumes:
+      - codepilot-home:/tmp/home
       - ./models:/work/models:ro
       - ./sample_project:/work/sample_project
       - ./eval:/work/eval
+      - ./mcp-calls.jsonl:/work/mcp-calls.jsonl
     stdin_open: true
+    profiles: ["cli"]
 
 volumes:
   pgdata:
+  codepilot-home:
