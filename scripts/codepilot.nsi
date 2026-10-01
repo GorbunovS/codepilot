@@ -17,7 +17,7 @@ Page instfiles
 
 Section "Install"
   SetOutPath "$INSTDIR"
-  File /r "..\CodePilot-Windows\*.*"
+  File /r "CodePilot-Windows\*.*"
 
   ; Ярлык в меню Пуск
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
