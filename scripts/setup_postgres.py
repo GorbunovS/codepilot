@@ -11,6 +11,8 @@
 После успеха выводит DSN, который можно использовать:
     codepilot web --store pg --pg-dsn <DSN>
 """
+from __future__ import annotations
+
 import json
 import os
 import platform

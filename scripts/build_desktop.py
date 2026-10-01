@@ -7,6 +7,8 @@
     python scripts/build_desktop.py              # нативная сборка
     python scripts/build_desktop.py --target windows   # Windows .exe на маке
 """
+from __future__ import annotations
+
 import argparse
 import os
 import platform
