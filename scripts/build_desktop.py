@@ -66,11 +66,11 @@ def ensure_ort_windows():
         return
     print("Скачиваю ONNX Runtime для Windows...")
     tmp = Path(tempfile.gettempdir())
-    zip_path = tmp / f"onnxruntime-win-x64-{ORT_VERSION}.tgz"
+    zip_path = tmp / f"onnxruntime-win-x64-{ORT_VERSION}.zip"
     if not zip_path.exists():
         url = (
             f"https://github.com/microsoft/onnxruntime/releases/download/"
-            f"v{ORT_VERSION}/onnxruntime-win-x64-{ORT_VERSION}.tgz"
+            f"v{ORT_VERSION}/onnxruntime-win-x64-{ORT_VERSION}.zip"
         )
         download(url, zip_path)
     extract = tmp / f"ort-win-{ORT_VERSION}"
