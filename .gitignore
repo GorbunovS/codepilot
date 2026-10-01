@@ -22,6 +22,9 @@ tools/laya-export/.venv/
 # (eval/report.md оставляем в репозитории как пример)
 __pycache__/
 
+# macOS
+.DS_Store
+
 # Сборки десктоп-приложения (Pake)
 CodePilot.app/
 CodePilot.dmg

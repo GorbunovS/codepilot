@@ -239,11 +239,25 @@ MCP-инструментов (графики), готовый сниппет MCP
 Состояние последних прогонов индексации сохраняется в `~/.codepilot/jobs.json`;
 после перезапуска панели история и итоговая строка `last_result` не теряются.
 
-Десктоп-обёртка (Pake, окно поверх панели — бэкенд не поднимает):
+Десктоп-обёртка (Pake, macOS, бэкенд запускается внутри .app автоматически):
 
 ```bash
-./codepilot web &       # панель должна работать и при сборке, и при запуске приложения
-./scripts/build_app.sh  # go build + pnpm dlx pake-cli http://127.0.0.1:8080 --name CodePilot
+# 1. Зависимости: Go, Node.js, pnpm, Python 3.12+ (для экспорта Laya), Docker.
+
+# 2. Модели и ONNX Runtime.
+./scripts/download_models.sh                    # e5-small ONNX
+./scripts/download_laya_src.sh                  # исходный чекпоинт Laya
+./scripts/download_ort_macos.sh                 # libonnxruntime.dylib в bin/
+cd tools/laya-export && pip install -r requirements.txt && python export_onnx.py ../../models/laya-multilingual-src ../../models/laya-multilingual && cd ../..
+
+# 3. Postgres+pgvector.
+docker compose up -d db
+
+# 4. Сборка CodePilot.app.
+./scripts/build_desktop.sh
+
+# 5. Запуск.
+open CodePilot.app
 ```
 
 ## Тесты и автообновление индекса
