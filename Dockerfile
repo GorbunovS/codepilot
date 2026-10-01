@@ -18,7 +18,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /models
 COPY scripts/download_models.sh .
-RUN chmod +x download_models.sh && sh ./download_models.sh fp32
+RUN sed -i 's/\r$//' download_models.sh && chmod +x download_models.sh && ./download_models.sh fp32
 
 # Stage 3: экспорт Laya в ONNX.
 FROM python:3.12-slim AS laya-export
@@ -27,11 +27,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /export
 COPY tools/laya-export/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN sed -i 's/\r$//' requirements.txt \
+    && pip install --no-cache-dir -r requirements.txt
 COPY scripts/download_laya_src.sh .
-RUN chmod +x download_laya_src.sh && sh ./download_laya_src.sh
+RUN sed -i 's/\r$//' download_laya_src.sh && chmod +x download_laya_src.sh && ./download_laya_src.sh
 COPY tools/laya-export/export_onnx.py .
-RUN python export_onnx.py /export/models/laya-multilingual-src /export/models/laya-multilingual
+RUN sed -i 's/\r$//' export_onnx.py \
+    && python export_onnx.py /export/models/laya-multilingual-src /export/models/laya-multilingual
 
 # Stage 4: финальный образ.
 FROM debian:bookworm-slim
