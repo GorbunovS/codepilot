@@ -43,14 +43,37 @@ def download(url: str, dest: Path):
     urllib.request.urlretrieve(url, dest)
 
 
-def go_bin() -> Path:
-    # Сначала ищем go в PATH
+def parse_go_version(output: str) -> tuple[int, int, int] | None:
+    # go version go1.26.0 windows/amd64
+    for part in output.split():
+        if part.startswith("go1."):
+            try:
+                ver = part[2:].split(".")
+                return int(ver[0]), int(ver[1]), int(ver[2]) if len(ver) > 2 else 0
+            except (ValueError, IndexError):
+                return None
+    return None
+
+
+def go_at_least(g: Path, min_major: int, min_minor: int, min_patch: int = 0) -> bool:
+    try:
+        out = subprocess.run([str(g), "version"], capture_output=True, text=True, check=True)
+        ver = parse_go_version(out.stdout)
+        if not ver:
+            return False
+        return ver >= (min_major, min_minor, min_patch)
+    except Exception:
+        return False
+
+
+def go_bin() -> Path | None:
+    # Сначала ищем go в PATH, проверяем версию
     go_path = shutil.which("go")
-    if go_path:
+    if go_path and go_at_least(Path(go_path), 1, 26, 0):
         return Path(go_path)
-    # Иначе используем portable Go из ~/.codepilot/go
+    # Иначе portable Go из ~/.codepilot/go
     portable = Path.home() / ".codepilot" / "go" / "bin" / "go.exe"
-    if portable.exists():
+    if portable.exists() and go_at_least(portable, 1, 26, 0):
         return portable
     return None
 
@@ -61,7 +84,7 @@ def ensure_go() -> Path:
         print(f"Go найден: {g}")
         return g
 
-    print("Go не найден в PATH. Скачиваю portable Go...")
+    print("Go >=1.26 не найден. Скачиваю portable Go 1.26...")
     import tempfile, zipfile
     version = "1.26.0"
     tmp = Path(tempfile.gettempdir())
@@ -75,7 +98,6 @@ def ensure_go() -> Path:
     go_dir.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "r") as z:
         z.extractall(go_dir.parent)
-    # после распаковки папка go/
     exe = go_dir / "bin" / "go.exe"
     if not exe.exists():
         raise RuntimeError("portable Go не распаковался")
