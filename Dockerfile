@@ -1,7 +1,9 @@
-# codepilot — сборка CLI и нативного рантайма onnxruntime для контейнера.
-# Модели в образ не входят: монтируются в ./models (см. docker-compose.yml).
+# codepilot — self-contained образ: CLI, onnxruntime, e5-small и Laya ONNX.
+# Модели скачиваются и экспортируются на этапе сборки, финальный образ
+# содержит только готовые файлы.
 
-FROM golang:1.26 AS build
+# Stage 1: сборка CLI.
+FROM golang:1.26 AS go-build
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY third_party ./third_party
@@ -9,6 +11,29 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/codepilot ./cmd/codepilot
 
+# Stage 2: скачивание e5-small.
+FROM debian:bookworm-slim AS e5-download
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /models
+COPY scripts/download_models.sh .
+RUN ./download_models.sh fp32
+
+# Stage 3: экспорт Laya в ONNX.
+FROM python:3.12-slim AS laya-export
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /export
+COPY tools/laya-export/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY scripts/download_laya_src.sh .
+RUN ./download_laya_src.sh
+COPY tools/laya-export/export_onnx.py .
+RUN python export_onnx.py /export/models/laya-multilingual-src /export/models/laya-multilingual
+
+# Stage 4: финальный образ.
 FROM debian:bookworm-slim
 ARG TARGETARCH
 ARG ORT_VERSION=1.23.1
@@ -27,7 +52,9 @@ RUN set -e; \
     ln -sf "libonnxruntime.so.${ORT_VERSION}" /usr/local/lib/libonnxruntime.so; \
     ldconfig; \
     rm -rf /tmp/ort*
-COPY --from=build /out/codepilot /usr/local/bin/codepilot
+COPY --from=go-build /out/codepilot /usr/local/bin/codepilot
+COPY --from=e5-download /models/e5-small /work/models/e5-small
+COPY --from=laya-export /export/models/laya-multilingual /work/models/laya-multilingual
 WORKDIR /work
 ENTRYPOINT ["codepilot"]
 CMD ["help"]

@@ -7,10 +7,11 @@
 # CLI-операции внутри контейнера:
 #   docker compose run --rm app index sample_project
 #   docker compose run --rm app eval
+#   docker compose run --rm app bench
 #   docker compose run --rm app search "запрос" --project sample_project
 #   docker compose run --rm -T app serve --project sample_project   # MCP stdio
 #
-# Модели (~2.5 ГБ) не входят в образ: монтируются из ./models.
+# Модели (e5-small + Laya ONNX) встроены в образ.
 # Конфиг и реестр проектов сохраняются в ~/.codepilot на хосте.
 services:
   db:
@@ -41,10 +42,9 @@ services:
       CODEPILOT_PG_DSN: postgres://codepilot:codepilot@db:5432/codepilot?sslmode=disable
       CODEPILOT_EMBED: onnx
       CODEPILOT_ONNXRUNTIME_DLL: /usr/local/lib/libonnxruntime.so
-      HOME: /tmp/home   # для хранения ~/.codepilot внутри volume
+      HOME: /tmp/home
     volumes:
       - codepilot-home:/tmp/home
-      - ./models:/work/models:ro
       - ./sample_project:/work/sample_project
       - ./eval:/work/eval
       - ./mcp-calls.jsonl:/work/mcp-calls.jsonl
@@ -68,7 +68,6 @@ services:
       HOME: /tmp/home
     volumes:
       - codepilot-home:/tmp/home
-      - ./models:/work/models:ro
       - ./sample_project:/work/sample_project
       - ./eval:/work/eval
       - ./mcp-calls.jsonl:/work/mcp-calls.jsonl

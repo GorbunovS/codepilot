@@ -81,7 +81,6 @@ BM25 по-прежнему строится в памяти. Один Postgres �
 проектов (ключ — абсолютный путь корня).
 
 ```bash
-./scripts/download_models.sh      # один раз: e5-small ONNX (~470 МБ)
 docker compose up -d                # Postgres + pgvector + веб-панель
 # открыть http://localhost:8080
 
@@ -92,6 +91,10 @@ docker compose run --rm app bench
 docker compose run --rm app search "запрос" --project sample_project
 docker compose run --rm -T app serve --project sample_project   # MCP по stdio
 ```
+
+Первый запуск `docker compose up -d` собирает образ: в него вшиты
+ONNX Runtime, e5-small и Laya ONNX (~1.9 ГБ). Предварительно качать
+модели на хост не нужно.
 
 Локально без Docker (нужны Postgres с pgvector и нативная onnxruntime в
 `bin/` или по пути из `CODEPILOT_ONNXRUNTIME_DLL`):
