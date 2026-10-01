@@ -151,15 +151,12 @@
             {{ status.indexing ? 'Индексация…' : 'Запустить индексацию' }}
           </button>
           <button v-if="status.indexing" @click="cancelIndex">Отменить</button>
-          <select v-model="device" :disabled="status.indexing">
-            <option v-for="d in devices" :key="d.value" :value="d.value">{{ d.label }}</option>
-          </select>
           <label class="row" style="gap:5px;cursor:pointer">
             <input type="checkbox" v-model="lowCpu">
             <span class="hint">щадящий режим (½ CPU)</span>
           </label>
         </div>
-        <div class="hint" style="margin-top:6px">видны только устройства, доступные в этой сборке onnxruntime</div>
+        <div class="hint" style="margin-top:6px">индексация всегда на CPU · поиск всегда hybrid+rerank с Laya ONNX</div>
         <div class="bar" v-if="status.indexing"><div style="width:100%"></div></div>
         <pre class="log" v-if="status.log && status.log.length">{{ status.log.join('\n') }}</pre>
         <div v-if="status.last_result" class="sub" :class="{err: status.last_result.startsWith('error')}" style="margin-top:8px">
@@ -172,9 +169,6 @@
         <div class="row">
           <input type="text" v-model="search.query" placeholder="запрос, напр. «где проверяется токен»"
                  style="flex:1;min-width:260px" @keyup.enter="runSearch">
-          <select v-model="search.mode">
-            <option v-for="m in searchModes" :key="m.value" :value="m.value" :disabled="m.disabled">{{ m.label }}</option>
-          </select>
           <input type="number" v-model.number="search.top" style="width:64px" title="top-k" min="1" max="50">
           <button :disabled="search.loading || !search.query.trim()" @click="runSearch">
             {{ search.loading ? '…' : 'Найти' }}
@@ -298,7 +292,7 @@ createApp({
       copied: false,
       mcpInstalled: '',
       skill: { installed: false, skills_dir: false, path: '' },
-      search: { query: '', mode: 'hybrid', top: 5, loading: false, done: false, result: { hits: [], need_more: false, noul: 0 }, expanded: {}, error: '' },
+      search: { query: '', mode: 'hybrid+rerank', top: 5, loading: false, done: false, result: { hits: [], need_more: false, noul: 0 }, expanded: {}, error: '' },
       offline: false,
       browser: { open: false, path: '', parent: '', dirs: [] },
       charts: {},
@@ -306,19 +300,7 @@ createApp({
       idleTimer: null,
     };
   },
-  computed: {
-    searchModes() {
-      // Режимы реранка работают и на эвристике; суффикс показывает, какой scorer реально используется.
-      const suffix = this.layaOnnx ? 'Laya ONNX' : 'эвристика';
-      return [
-        { value: 'fts', label: 'fts — BM25' },
-        { value: 'vec', label: 'vec — TF-IDF cosine' },
-        { value: 'hybrid', label: 'hybrid — RRF' },
-        { value: 'hybrid+rerank', label: 'hybrid+rerank — ' + suffix },
-        { value: 'hybrid+blend', label: 'hybrid+blend — ' + suffix + ' + RRF' },
-      ];
-    },
-  },
+
   async mounted() {
     await this.loadDevices();
     await this.loadProjects();
@@ -353,9 +335,7 @@ createApp({
     async loadDevices() {
       try {
         const d = await this.api('GET', '/api/devices');
-        this.devices = d.devices || this.devices;
         this.layaOnnx = !!d.laya_onnx;
-        if (d.current) this.device = d.current;
       } catch (e) { /* оффлайн-баннер уже показан */ }
     },
     async loadProjects() {
@@ -438,9 +418,6 @@ createApp({
       if (!this.selected) return;
       this.status = await this.api('GET', '/api/status?path=' + encodeURIComponent(this.selected));
       this.indexingOf = this.status.indexing ? this.selected : '';
-      if (this.status.device && this.status.device !== this.device) {
-        this.device = this.status.device;
-      }
       if (this.status.indexing && !this.pollTimer) this.startPoll();
     },
     async loadStats() {
@@ -484,7 +461,7 @@ createApp({
       this.search.error = '';
       try {
         const d = await this.api('POST', '/api/search', {
-          path: this.selected, query: this.search.query, mode: this.search.mode, top: this.search.top,
+          path: this.selected, query: this.search.query, mode: 'hybrid+rerank', top: this.search.top,
         });
         this.search.result = d;
         this.search.expanded = {};

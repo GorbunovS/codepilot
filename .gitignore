@@ -21,3 +21,7 @@ tools/laya-export/.venv/
 # Отчёты eval перегенерируются командой eval
 # (eval/report.md оставляем в репозитории как пример)
 __pycache__/
+
+# Сборки десктоп-приложения (Pake)
+CodePilot.app/
+CodePilot.dmg

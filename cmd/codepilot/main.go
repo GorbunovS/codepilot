@@ -103,7 +103,7 @@ hybrid (RRF k=60), hybrid+rerank (порядок задаёт Laya), hybrid+blen
 
 // layaFlags — общие флаги слоя решений для search/serve/eval/bench.
 func layaFlags(fs *flag.FlagSet) (kind, dir *string) {
-	kind = fs.String("laya", "", "движок слоя решений: heuristic|onnx (по умолчанию CODEPILOT_LAYA или heuristic)")
+	kind = fs.String("laya", envOr("CODEPILOT_LAYA", "onnx"), "движок слоя решений: heuristic|onnx (по умолчанию onnx)")
 	dir = fs.String("laya-dir", "", "каталог модели Laya (по умолчанию models/laya-multilingual)")
 	return kind, dir
 }
@@ -148,9 +148,9 @@ func envOrInt(key string, def int) int {
 
 func storeFlags(fs *flag.FlagSet) storeFlagsT {
 	return storeFlagsT{
-		store:       fs.String("store", envOr("CODEPILOT_STORE", "sqlite"), "хранилище индекса: sqlite|pg"),
+		store:       fs.String("store", envOr("CODEPILOT_STORE", "pg"), "хранилище индекса: sqlite|pg"),
 		dsn:         fs.String("pg-dsn", envOr("CODEPILOT_PG_DSN", "postgres://codepilot:codepilot@localhost:5432/codepilot?sslmode=disable"), "DSN Postgres (режим pg)"),
-		embed:       fs.String("embed", envOr("CODEPILOT_EMBED", ""), `эмбеддер: onnx|"" (по умолчанию без эмбеддингов)`),
+		embed:       fs.String("embed", envOr("CODEPILOT_EMBED", "onnx"), `эмбеддер: onnx|"" (по умолчанию без эмбеддингов)`),
 		embedDir:    fs.String("embed-dir", "models/e5-small", "каталог ONNX-модели эмбеддингов"),
 		embedServer: fs.String("embed-server", envOr("CODEPILOT_EMBED_SERVER", ""), "URL MLX-сайдкара эмбеддингов (напр. http://127.0.0.1:8081); заменяет --embed onnx"),
 		device:      fs.String("device", envOr("CODEPILOT_DEVICE", "cpu"), "устройство инференса ONNX: cpu|coreml|cuda"),
@@ -348,7 +348,6 @@ func splitFlags(fs *flag.FlagSet, args []string) (flags, positional []string) {
 func cmdSearch(args []string) error {
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
 	project := fs.String("project", ".", "корень проекта")
-	mode := fs.String("mode", "hybrid+rerank", "fts|vec|hybrid|hybrid+rerank|hybrid+blend")
 	top := fs.Int("top", 5, "сколько результатов показать")
 	content := fs.Bool("content", false, "печатать содержимое чанков")
 	layaKind, layaDir := layaFlags(fs)
@@ -366,12 +365,13 @@ func cmdSearch(args []string) error {
 	defer cleanup()
 	scorer := resolveScorer(*layaKind, *layaDir, *sf.maxThreads, mustProviders(sf))
 	defer closeScorer(scorer)
-	hits, err := ix.Search(query, *mode, *top, scorer)
+	const searchMode = "hybrid+rerank"
+	hits, err := ix.Search(query, searchMode, *top, scorer)
 	if err != nil {
 		return err
 	}
 	noul := scorer.Noul(query, hits)
-	fmt.Printf("mode=%s noul=%.2f need_more=%v\n\n", *mode, noul, noul < 0.5)
+	fmt.Printf("mode=%s noul=%.2f need_more=%v\n\n", searchMode, noul, noul < 0.5)
 	for i, h := range hits {
 		c := h.Chunk
 		fmt.Printf("[%d] %.4f  %s:%d-%d  %s %s\n", i+1, h.Score, c.FilePath, c.StartLine, c.EndLine, c.Kind, c.SymbolName)
