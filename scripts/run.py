@@ -56,8 +56,16 @@ def parse_go_version(output: str) -> tuple[int, int, int] | None:
 
 
 def go_at_least(g: Path, min_major: int, min_minor: int, min_patch: int = 0) -> bool:
+    # GOTOOLCHAIN=local и нейтральный cwd: иначе go 1.23 в каталоге с go.mod
+    # молча переключается на скачанный toolchain 1.26 и врёт про свою версию.
+    import tempfile
+    env = os.environ.copy()
+    env["GOTOOLCHAIN"] = "local"
     try:
-        out = subprocess.run([str(g), "version"], capture_output=True, text=True, check=True)
+        out = subprocess.run(
+            [str(g), "version"], capture_output=True, text=True, check=True,
+            env=env, cwd=tempfile.gettempdir(),
+        )
         ver = parse_go_version(out.stdout)
         if not ver:
             return False
@@ -101,6 +109,10 @@ def ensure_go() -> Path:
     exe = go_dir / "bin" / "go.exe"
     if not exe.exists():
         raise RuntimeError("portable Go не распаковался")
+    if not go_at_least(exe, 1, 26, 0):
+        out = subprocess.run([str(exe), "version"], capture_output=True, text=True,
+                             env={**os.environ, "GOTOOLCHAIN": "local"})
+        raise RuntimeError(f"portable Go после распаковки слишком старый: {out.stdout.strip()}")
     return exe
 
 
