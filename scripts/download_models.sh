@@ -7,7 +7,7 @@
 # Источник: https://huggingface.co/Xenova/multilingual-e5-small
 set -eu
 
-E5_DIR="models/e5-small"
+E5_DIR="${E5_DIR:-models/e5-small}"
 BASE="https://huggingface.co/Xenova/multilingual-e5-small/resolve/main"
 
 variant="${1:-fp32}"

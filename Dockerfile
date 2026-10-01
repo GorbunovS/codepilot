@@ -18,7 +18,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /models
 COPY scripts/download_models.sh .
-RUN sed -i 's/\r$//' download_models.sh && chmod +x download_models.sh && ./download_models.sh fp32
+RUN sed -i 's/\r$//' download_models.sh && chmod +x download_models.sh && E5_DIR=/models/e5-small ./download_models.sh fp32
 
 # Stage 3: экспорт Laya в ONNX.
 FROM python:3.12-slim AS laya-export
