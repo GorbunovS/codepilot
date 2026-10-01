@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -42,15 +43,55 @@ def download(url: str, dest: Path):
     urllib.request.urlretrieve(url, dest)
 
 
+def go_bin() -> Path:
+    # Сначала ищем go в PATH
+    go_path = shutil.which("go")
+    if go_path:
+        return Path(go_path)
+    # Иначе используем portable Go из ~/.codepilot/go
+    portable = Path.home() / ".codepilot" / "go" / "bin" / "go.exe"
+    if portable.exists():
+        return portable
+    return None
+
+
+def ensure_go() -> Path:
+    g = go_bin()
+    if g:
+        print(f"Go найден: {g}")
+        return g
+
+    print("Go не найден в PATH. Скачиваю portable Go...")
+    import tempfile, zipfile
+    version = "1.23.2"
+    tmp = Path(tempfile.gettempdir())
+    zip_path = tmp / f"go{version}.windows-amd64.zip"
+    if not zip_path.exists():
+        url = f"https://go.dev/dl/go{version}.windows-amd64.zip"
+        download(url, zip_path)
+    go_dir = Path.home() / ".codepilot" / "go"
+    if go_dir.exists():
+        shutil.rmtree(go_dir)
+    go_dir.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "r") as z:
+        z.extractall(go_dir.parent)
+    # после распаковки папка go/
+    exe = go_dir / "bin" / "go.exe"
+    if not exe.exists():
+        raise RuntimeError("portable Go не распаковался")
+    return exe
+
+
 def ensure_codepilot():
     exe = ROOT / "codepilot.exe"
     if exe.exists():
         print("codepilot.exe уже есть")
         return
     print("Собираю codepilot.exe...")
+    go = ensure_go()
     env = os.environ.copy()
     env["CGO_ENABLED"] = "0"
-    run(["go", "build", "-o", "codepilot.exe", "./cmd/codepilot"], cwd=ROOT, env=env)
+    run([go, "build", "-o", "codepilot.exe", "./cmd/codepilot"], cwd=ROOT, env=env)
 
 
 def ensure_ort():
