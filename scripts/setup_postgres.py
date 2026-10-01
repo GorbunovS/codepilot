@@ -51,6 +51,17 @@ def download(url: str, dest: Path):
     urllib.request.urlretrieve(url, dest)
 
 
+def pg_ready() -> bool:
+    """Проверяет, слушает ли Postgres на 127.0.0.1:5432."""
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", int(PORT)), timeout=1) as s:
+            s.recv(1)
+        return True
+    except OSError:
+        return False
+
+
 def unzip(archive: Path, dest: Path):
     print(f"распаковываю {archive} -> {dest}")
     dest.mkdir(parents=True, exist_ok=True)
