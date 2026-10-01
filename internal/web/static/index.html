@@ -151,12 +151,15 @@
             {{ status.indexing ? 'Индексация…' : 'Запустить индексацию' }}
           </button>
           <button v-if="status.indexing" @click="cancelIndex">Отменить</button>
+          <select v-model="device" :disabled="status.indexing" title="устройство инференса эмбеддингов">
+            <option v-for="d in devices" :key="d.value" :value="d.value">{{ d.label }}</option>
+          </select>
           <label class="row" style="gap:5px;cursor:pointer">
             <input type="checkbox" v-model="lowCpu">
             <span class="hint">щадящий режим (½ CPU)</span>
           </label>
         </div>
-        <div class="hint" style="margin-top:6px">индексация всегда на CPU · поиск всегда hybrid+rerank с Laya ONNX</div>
+        <div class="hint" style="margin-top:6px">индексация на {{ deviceLabel }} · поиск hybrid+rerank с Laya ONNX</div>
         <div class="bar" v-if="status.indexing"><div style="width:100%"></div></div>
         <pre class="log" v-if="status.log && status.log.length">{{ status.log.join('\n') }}</pre>
         <div v-if="status.last_result" class="sub" :class="{err: status.last_result.startsWith('error')}" style="margin-top:8px">
@@ -336,6 +339,10 @@ createApp({
       try {
         const d = await this.api('GET', '/api/devices');
         this.layaOnnx = !!d.laya_onnx;
+        if (d.devices && d.devices.length) {
+          this.devices = d.devices;
+          this.device = d.current || d.devices[0].value;
+        }
       } catch (e) { /* оффлайн-баннер уже показан */ }
     },
     async loadProjects() {
@@ -524,6 +531,12 @@ createApp({
       if (n < 1024) return n + ' Б';
       if (n < 1 << 20) return (n / 1024).toFixed(1) + ' КБ';
       return (n / (1 << 20)).toFixed(1) + ' МБ';
+    },
+  },
+  computed: {
+    deviceLabel() {
+      const d = this.devices.find(x => x.value === this.device);
+      return d ? d.label : this.device;
     },
   },
 }).mount('#app');

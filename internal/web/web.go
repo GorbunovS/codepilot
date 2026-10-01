@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -107,6 +108,11 @@ type server struct {
 	embMu     sync.Mutex
 	emb       embed.TextEmbedder // общий e5-эмбеддер панели (ленивый синглтон)
 	embSet    bool
+
+	mlxMu     sync.Mutex
+	mlxProc   *exec.Cmd
+	mlxStarted bool
+	mlxErr    error
 }
 
 // cachedIndex — открытый индекс проекта с меткой файла для инвалидации.
@@ -343,6 +349,106 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
 }
 
+// findMLXSidecar ищет каталог tools/mlx-sidecar рядом с бинарем или в cwd.
+func (s *server) findMLXSidecar() string {
+	candidates := []string{}
+	if s.opts.BinPath != "" {
+		binDir := filepath.Dir(s.opts.BinPath)
+		candidates = append(candidates,
+			filepath.Join(binDir, "..", "tools", "mlx-sidecar"),
+			filepath.Join(binDir, "..", "..", "tools", "mlx-sidecar"),
+		)
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(cwd, "tools", "mlx-sidecar"))
+	}
+	if v := os.Getenv("CODEPILOT_MLX_SIDECAR"); v != "" {
+		candidates = append(candidates, v)
+	}
+	for _, d := range candidates {
+		if _, err := os.Stat(filepath.Join(d, "run.sh")); err == nil {
+			return d
+		}
+	}
+	return ""
+}
+
+// ensureMLX лениво запускает MLX-сайдкар эмбеддингов на macOS Apple Silicon.
+// После успеха s.opts.EmbedServer указывает на http://127.0.0.1:8081.
+func (s *server) ensureMLX() error {
+	s.mlxMu.Lock()
+	defer s.mlxMu.Unlock()
+	if s.mlxErr != nil {
+		return s.mlxErr
+	}
+	if s.mlxStarted {
+		return nil
+	}
+	s.mlxStarted = true
+	if s.opts.EmbedServer != "" {
+		return nil
+	}
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		return errors.New("MLX доступен только на macOS Apple Silicon")
+	}
+	dir := s.findMLXSidecar()
+	if dir == "" {
+		s.mlxErr = errors.New("MLX-сайдкар не найдён: tools/mlx-sidecar/run.sh")
+		return s.mlxErr
+	}
+	runSh := filepath.Join(dir, "run.sh")
+	venv := filepath.Join(dir, ".venv")
+	if _, err := os.Stat(venv); err != nil {
+		fmt.Fprintf(os.Stderr, "MLX: создаю venv в %s...\\n", dir)
+		cmd := exec.Command("python3", "-m", "venv", ".venv")
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			s.mlxErr = fmt.Errorf("создание venv: %w\\n%s", err, out)
+			return s.mlxErr
+		}
+		pip := filepath.Join(venv, "bin", "pip")
+		req := filepath.Join(dir, "requirements.txt")
+		cmd = exec.Command(pip, "install", "-r", req)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			s.mlxErr = fmt.Errorf("pip install: %w\\n%s", err, out)
+			return s.mlxErr
+		}
+	}
+	fmt.Fprintf(os.Stderr, "MLX: запускаю сайдкар...\\n")
+	cmd := exec.Command(runSh)
+	cmd.Dir = dir
+	if err := cmd.Start(); err != nil {
+		s.mlxErr = err
+		return s.mlxErr
+	}
+	s.mlxProc = cmd
+	for i := 0; i < 120; i++ {
+		time.Sleep(500 * time.Millisecond)
+		resp, err := http.Get("http://127.0.0.1:8081/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				s.opts.EmbedServer = "http://127.0.0.1:8081"
+				fmt.Fprintf(os.Stderr, "MLX: сайдкар готов (%s)\\n", s.opts.EmbedServer)
+				return nil
+			}
+		}
+	}
+	s.mlxErr = errors.New("MLX-сайдкар не поднялся за 60 с")
+	return s.mlxErr
+}
+
+// stopMLX завершает фоновый сайдкар (для graceful shutdown).
+func (s *server) stopMLX() {
+	s.mlxMu.Lock()
+	defer s.mlxMu.Unlock()
+	if s.mlxProc != nil && s.mlxProc.Process != nil {
+		_ = s.mlxProc.Process.Kill()
+		_ = s.mlxProc.Wait()
+	}
+}
+
 func (s *server) handleProjects(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -508,7 +614,12 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if _, err := embed.ProvidersForDevice(req.Device); err != nil {
+	if req.Device == "mlx" {
+		if err := s.ensureMLX(); err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+	} else if _, err := embed.ProvidersForDevice(req.Device); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
@@ -1082,6 +1193,9 @@ func (s *server) handleDevices(w http.ResponseWriter, _ *http.Request) {
 		}
 		switch runtime.GOOS {
 		case "darwin":
+			if runtime.GOARCH == "arm64" {
+				devs = append(devs, deviceInfo{Value: "mlx", Label: "mlx (Apple Silicon GPU)"})
+			}
 			if has["CoreMLExecutionProvider"] {
 				devs = append(devs, deviceInfo{Value: "coreml", Label: "coreml (ANE/GPU)"})
 			}
