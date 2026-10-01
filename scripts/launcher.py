@@ -123,10 +123,23 @@ def open_window():
             subprocess.run(["xdg-open", URL])
 
 
+def log(msg: str):
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] {msg}"
+    print(line)
+    try:
+        log_path = root_dir() / "launcher.log"
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as e:
+        print(f"[log error] {e}")
+
+
 def main():
     cp = codepilot_bin()
+    log(f"launcher start, root={root_dir()}, binary={cp}")
     if not cp.exists():
-        print(f"ERROR: не найден бинарь {cp}")
+        log(f"ERROR: не найден бинарь {cp}")
         sys.exit(1)
 
     ensure_models()
