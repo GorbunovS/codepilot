@@ -1,0 +1,51 @@
+name: release-win
+
+on:
+  push:
+    branches: [prod]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '9'
+
+      - name: Rust toolchain (для Pake/Tauri)
+        run: rustup default stable
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+
+      - name: Build Windows installer
+        run: |
+          $VERSION = "v$(Get-Date -Format 'yyyy.MM.dd-HHmm')"
+          echo "VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_ENV -Append
+          python scripts/build_windows.py --version $VERSION
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ env.VERSION }}" `
+            installers/windows/CodePilot-Setup.exe `
+            --title "CodePilot Windows ${{ env.VERSION }}" `
+            --notes "Автосборка с ветки prod" `
+            --target prod
