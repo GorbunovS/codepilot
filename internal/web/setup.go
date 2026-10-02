@@ -72,23 +72,7 @@ func dockerAvailable() bool {
 	return cmd.Run() == nil
 }
 
-func modelsReady(modelsDir string) map[string]bool {
-	d := modelsDir
-	if d == "" {
-		d = defaultModelsDir()
-	}
-	return map[string]bool{
-		"e5":  fileExists(filepath.Join(d, "e5-small", "model.onnx")),
-		"laya": fileExists(filepath.Join(d, "laya-multilingual", "laya.onnx")),
-	}
-}
-
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
-}
-
-func defaultModelsDir() string {
+func modelsRoot() string {
 	if v := os.Getenv("CODEPILOT_MODELS_DIR"); v != "" {
 		return v
 	}
@@ -97,6 +81,37 @@ func defaultModelsDir() string {
 		return filepath.Join(home, ".codepilot", "models")
 	}
 	return "models"
+}
+
+func (s *server) modelsDir() string {
+	if v := os.Getenv("CODEPILOT_MODELS_DIR"); v != "" {
+		return v
+	}
+	if s.opts.EmbedDir != "" {
+		return filepath.Dir(s.opts.EmbedDir)
+	}
+	return modelsRoot()
+}
+
+func modelsReady(modelsDir string) map[string]bool {
+	d := modelsDir
+	if d == "" {
+		d = modelsRoot()
+	}
+	layaDir := filepath.Join(d, "laya-multilingual")
+	// Модель с внешними весами: laya.onnx маленький (~3 МБ), основной вес —
+	// laya.onnx.data (~1.3 ГБ). Без .data модель пустая и даёт низкие score.
+	layaOK := fileExists(filepath.Join(layaDir, "laya.onnx")) &&
+		fileExists(filepath.Join(layaDir, "laya.onnx.data"))
+	return map[string]bool{
+		"e5":  fileExists(filepath.Join(d, "e5-small", "model.onnx")),
+		"laya": layaOK,
+	}
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 func (s *server) setupLogPath() string {
@@ -138,16 +153,14 @@ func (s *server) findScript(name string) string {
 }
 
 func (s *server) handleSetupStatus(w http.ResponseWriter, _ *http.Request) {
-	mods := modelsReady(s.opts.EmbedDir)
-	if !mods["e5"] && s.opts.EmbedDir == "" {
-		mods = modelsReady(defaultModelsDir())
-	}
+	modelsDir := s.modelsDir()
+	mods := modelsReady(modelsDir)
 	running, phase, err, log := s.setup.snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"store":            s.opts.Store,
 		"pg_ready":         pgReady(),
 		"docker_available": dockerAvailable(),
-		"models_dir":       s.opts.EmbedDir,
+		"models_dir":       modelsDir,
 		"models_ready":     mods,
 		"ready":            pgReady() && mods["e5"] && mods["laya"],
 		"running":          running,
@@ -205,9 +218,7 @@ func (s *server) runSetup(script, name, phase string) {
 
 	s.setup.append(fmt.Sprintf("=== начало настройки %s ===", name))
 	env := os.Environ()
-	if s.opts.EmbedDir != "" {
-		env = append(env, "CODEPILOT_MODELS_DIR="+s.opts.EmbedDir)
-	}
+	env = append(env, "CODEPILOT_MODELS_DIR="+s.modelsDir())
 	cmd := exec.Command("python3", script)
 	cmd.Env = env
 	stdout, err := cmd.StdoutPipe()

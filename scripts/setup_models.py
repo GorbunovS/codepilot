@@ -40,14 +40,15 @@ def ensure_e5():
 
 def ensure_laya():
     laya_dir = MODELS_DIR / "laya-multilingual"
-    if (laya_dir / "laya.onnx").exists():
-        print(f"есть: {laya_dir / 'laya.onnx'}")
+    if (laya_dir / "laya.onnx").exists() and (laya_dir / "laya.onnx.data").exists():
+        print(f"есть: {laya_dir / 'laya.onnx'} (+ data)")
         return
 
     # Готовый ONNX (без локального экспорта — не нужен torch).
     onnx_base = "https://huggingface.co/yehor-oleksiuk/laya-multilingual-onnx/resolve/main"
     files = {
         "laya.onnx": f"{onnx_base}/model_fp32.onnx",
+        "laya.onnx.data": f"{onnx_base}/model_fp32.onnx.data",
         "tokenizer.json": f"{onnx_base}/tokenizer.json",
         "tokenizer_config.json": f"{onnx_base}/tokenizer_config.json",
     }
