@@ -12,6 +12,7 @@
 .DS_Store
 .kimi-code/
 /CodePilot-Setup.exe
+/CodePilot-Windows/
 /CodePilot-macOS.pkg
 /codepilot
 /codepilot.exe
