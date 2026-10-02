@@ -236,8 +236,7 @@ func BuildPrev(root string, prev *Index) (*Index, Stats, error) {
 			ix.Chunks = append(ix.Chunks, kept...)
 			st.Kept++
 		} else {
-			ch, _ := chunk.ForFile(rel)
-			ix.Chunks = append(ix.Chunks, ch(rel, src)...)
+			ix.Chunks = append(ix.Chunks, chunk.ChunkFile(rel, src)...)
 			st.Reindexed++
 		}
 		ix.Manifest[rel] = h

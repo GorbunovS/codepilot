@@ -13,7 +13,7 @@ import (
 
 // Version — версия логики чанкинга. Инкрементируйте при изменении чанкеров:
 // индексы, собранные старой версией, пересобираются целиком.
-const Version = 5
+const Version = 6
 
 // Chunk — атомарная единица индекса: символ (функция, тип, класс) или окно.
 type Chunk struct {
@@ -58,6 +58,68 @@ var registry = map[string]Chunker{
 	".sh":    chunkShell,
 	".bash":  chunkShell,
 	".zsh":   chunkShell,
+}
+
+// Language возвращает язык по расширению файла (для fallback-чанков).
+func Language(relPath string) string {
+	ext := strings.ToLower(filepath.Ext(relPath))
+	switch ext {
+	case ".go":
+		return "go"
+	case ".py":
+		return "python"
+	case ".js", ".jsx":
+		return "javascript"
+	case ".ts", ".tsx":
+		return "typescript"
+	case ".vue":
+		return "vue"
+	case ".qml":
+		return "qml"
+	case ".json":
+		return "json"
+	case ".md":
+		return "markdown"
+	case ".yaml", ".yml":
+		return "yaml"
+	case ".toml":
+		return "toml"
+	case ".ini", ".cfg":
+		return "ini"
+	case ".css", ".scss", ".less":
+		return "css"
+	case ".html", ".htm":
+		return "html"
+	case ".sh", ".bash", ".zsh":
+		return "shell"
+	default:
+		return "text"
+	}
+}
+
+// ChunkFile — обёртка чанкера: если чанкер не нашёл ни одного символа
+// (все чанки — fallback-окна), добавляет чанк всего файла с именем файла.
+// Иначе get_symbol и поиск по имени файла не сработают.
+func ChunkFile(relPath string, src []byte) []Chunk {
+	ch, ok := ForFile(relPath)
+	if !ok {
+		return Fallback(relPath, Language(relPath), src)
+	}
+	out := ch(relPath, src)
+	hasSymbol := false
+	for _, c := range out {
+		if c.Kind != "window" {
+			hasSymbol = true
+			break
+		}
+	}
+	if hasSymbol {
+		return out
+	}
+	lines := Lines(src)
+	name := componentName(relPath)
+	fileChunk := newChunk(relPath, Language(relPath), 1, len(lines), name, "file", name, "", lines, HashBytes(src))
+	return append([]Chunk{fileChunk}, out...)
 }
 
 // SupportedExts возвращает отсортированный список поддерживаемых расширений.
