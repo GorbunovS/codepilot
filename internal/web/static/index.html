@@ -264,6 +264,8 @@
         <template v-else-if="stats.mcp">
           <div class="cards">
             <div class="card"><div class="num acc">{{ stats.mcp.total }}</div><div class="lbl">вызовов</div></div>
+            <div class="card"><div class="num">{{ fmtTokens(stats.mcp.total_tokens) }}</div><div class="lbl">токенов выдано</div></div>
+            <div class="card"><div class="num">{{ fmtTokens(stats.mcp.avg_tokens) }}</div><div class="lbl">avg токенов</div></div>
             <div class="card"><div class="num">{{ stats.mcp.avg_latency_ms.toFixed(1) }} мс</div><div class="lbl">avg latency</div></div>
             <div class="card"><div class="num">{{ fmtBytes(stats.mcp.avg_bytes) }}</div><div class="lbl">avg ответ</div></div>
           </div>
@@ -670,6 +672,12 @@ createApp({
       if (n < 1024) return n + ' Б';
       if (n < 1 << 20) return (n / 1024).toFixed(1) + ' КБ';
       return (n / (1 << 20)).toFixed(1) + ' МБ';
+    },
+    fmtTokens(n) {
+      if (n == null) return '';
+      if (n < 1000) return Math.round(n);
+      if (n < 1000000) return (n / 1000).toFixed(1) + 'k';
+      return (n / 1000000).toFixed(1) + 'M';
     },
   },
   computed: {

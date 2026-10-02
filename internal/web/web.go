@@ -1071,6 +1071,7 @@ func mcpStats(logPath string) map[string]any {
 	out := map[string]any{
 		"total": 0, "per_tool": map[string]int{},
 		"avg_latency_ms": 0.0, "avg_bytes": 0.0,
+		"total_bytes": 0, "total_tokens": 0.0, "avg_tokens": 0.0,
 		"recent": []mcpCall{}, "last": []mcpCall{},
 	}
 	if logPath == "" {
@@ -1103,9 +1104,12 @@ func mcpStats(logPath string) map[string]any {
 	}
 	out["total"] = len(calls)
 	out["per_tool"] = perTool
+	out["total_bytes"] = sumBytes
 	if len(calls) > 0 {
 		out["avg_latency_ms"] = float64(sumLat) / float64(len(calls))
 		out["avg_bytes"] = float64(sumBytes) / float64(len(calls))
+		out["total_tokens"] = float64(sumBytes) / 4
+		out["avg_tokens"] = float64(sumBytes) / 4 / float64(len(calls))
 	}
 	// серия для графиков — последние 200 вызовов
 	recent := calls
