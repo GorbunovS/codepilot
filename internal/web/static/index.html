@@ -378,7 +378,7 @@ createApp({
     join(base, d) { return base.replace(/[\\/]+$/, '') + '/' + d; },
     async addProject(path) {
       try {
-        const d = await this.api('POST', '/api/projects', { path });
+        const d = await this.api('POST', '/api/projects', { path, device: this.device });
         this.browser.open = false;
         this.projects = d.projects || this.projects;
         // путь из проводника уже абсолютный (его вернул сервер)

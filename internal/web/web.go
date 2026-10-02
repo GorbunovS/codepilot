@@ -465,10 +465,20 @@ func (s *server) saveProjectsLocked() {
 
 func (s *server) handleAddProject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path string `json:"path"`
+		Path   string `json:"path"`
+		Device string `json:"device"` // устройство автоиндексации; пусто — текущее из настроек
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Path) == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("нужен JSON {\"path\": \"...\"}"))
+		return
+	}
+	if req.Device == "mlx" {
+		if err := s.ensureMLX(); err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+	} else if _, err := embed.ProvidersForDevice(req.Device); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 	abs, err := filepath.Abs(strings.TrimSpace(req.Path))
@@ -500,11 +510,12 @@ func (s *server) handleAddProject(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	// Автоиндексация: новый проект без index.db индексируем сразу, чтобы
-	// пользователю не приходилось запускать команду руками. Глобальный гейт
-	// (одна индексация за раз) сохраняется — при занятости запускаем вручную.
+	// пользователю не приходилось запускать команду руками. Устройство берём
+	// из запроса (выбор в UI), иначе новый проект молча уходил бы на CPU.
+	// Глобальный гейт (одна индексация за раз) сохраняется.
 	indexing := false
 	if added && !s.hasIndexFile(abs) {
-		indexing = s.startIndexing(abs, "", 0)
+		indexing = s.startIndexing(abs, req.Device, 0)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"projects": s.projectsList(),

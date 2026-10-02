@@ -14,6 +14,8 @@
 """
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import plistlib
 import shutil
@@ -26,13 +28,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 APP_NAME = "CodePilot"
 BUNDLE_ID = "com.codepilot.app"
-VERSION = "1.0.0"
+DEFAULT_VERSION = "1.0.0"
 ADDR = "127.0.0.1:8080"
+REPO = "GorbunovS/codepilot"
 
 
 def run(cmd: list[str | Path], **kwargs):
     print("  $", " ".join(str(c) for c in cmd))
     subprocess.run([str(c) for c in cmd], check=True, **kwargs)
+
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--version", default=DEFAULT_VERSION, help="версия сборки (тег релиза)")
+    return p.parse_args()
 
 
 def build_go_binary():
@@ -64,7 +73,7 @@ def make_icon(work: Path) -> Path | None:
 
 
 LAUNCHER = r"""#!/bin/bash
-# CodePilot launcher: настройка окружения -> codepilot web -> браузер.
+# CodePilot launcher: проверка обновлений -> настройка окружения -> web -> браузер.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RES="$HERE/../Resources"
@@ -79,6 +88,20 @@ PY3="$(command -v python3 || true)"
 if [ -z "$PY3" ]; then
   osascript -e 'display alert "CodePilot: нужен python3" message "Установи Xcode Command Line Tools: xcode-select --install"' || true
   exit 1
+fi
+
+# Проверка обновлений через GitHub Releases.
+REPO="__REPO__"
+CURRENT="$(cat "$RES/version.txt" 2>/dev/null || echo 'unknown')"
+if [ "$CURRENT" != "unknown" ]; then
+  LATEST="$(curl -s --max-time 5 "https://api.github.com/repos/$REPO/releases/latest" | \
+    "$PY3" -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null || true)"
+  if [ -n "$LATEST" ] && [ "$LATEST" != "$CURRENT" ]; then
+    osascript -e "display alert \"CodePilot: доступна версия $LATEST\" \
+      message \"Установлена: $CURRENT. Скачай новый .pkg с github.com/$REPO/releases/latest\" \
+      buttons {\"Позже\", \"Скачать\"} default button \"Скачать\"" 2>/dev/null | \
+      grep -q "Скачать" && open "https://github.com/$REPO/releases/latest"
+  fi
 fi
 
 # Postgres: docker -> brew (scripts/setup_postgres.py решит сам).
@@ -165,8 +188,14 @@ def assemble_app(work: Path) -> Path:
 
     # лаунчер
     launcher = macos / APP_NAME
-    launcher.write_text(LAUNCHER.replace("__ADDR__", ADDR), encoding="utf-8")
+    launcher.write_text(
+        LAUNCHER.replace("__ADDR__", ADDR).replace("__REPO__", REPO),
+        encoding="utf-8",
+    )
     launcher.chmod(launcher.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    # версия для проверки обновлений
+    (res / "version.txt").write_text(VERSION, encoding="utf-8")
 
     # иконка
     icon = make_icon(work)
@@ -207,7 +236,8 @@ def build_pkg(app: Path, work: Path) -> Path:
     )
     post.chmod(0o755)
 
-    out = ROOT / "CodePilot-macOS.pkg"
+    out = ROOT / "installers" / "mac" / "CodePilot-macOS.pkg"
+    out.parent.mkdir(parents=True, exist_ok=True)
     run([
         "pkgbuild",
         "--root", str(payload),
@@ -217,10 +247,22 @@ def build_pkg(app: Path, work: Path) -> Path:
         "--install-location", "/Applications",
         str(out),
     ])
+    # JSON-метаданные для CI / ручной проверки
+    meta = {
+        "version": VERSION,
+        "download_url": f"https://github.com/{REPO}/releases/latest/download/CodePilot-macOS.pkg",
+        "release_url": f"https://github.com/{REPO}/releases/latest",
+    }
+    (out.parent / "version.json").write_text(
+        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     return out
 
 
 def main():
+    args = parse_args()
+    global VERSION
+    VERSION = args.version
     if sys.platform != "darwin":
         print("сборка macOS-установщика возможна только на macOS")
         sys.exit(1)
