@@ -101,11 +101,18 @@ CURRENT="$(cat "$RES/version.txt" 2>/dev/null || echo 'unknown')"
 if [ "$CURRENT" != "unknown" ]; then
   LATEST="$(curl -s --max-time 5 "https://api.github.com/repos/$REPO/releases/latest" | \
     "$PY3" -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null || true)"
-  if [ -n "$LATEST" ] && [ "$LATEST" != "$CURRENT" ]; then
-    osascript -e "display alert \"CodePilot: доступна версия $LATEST\" \
-      message \"Установлена: $CURRENT. Скачай новый .pkg с github.com/$REPO/releases/latest\" \
-      buttons {\"Позже\", \"Скачать\"} default button \"Скачать\"" 2>/dev/null | \
-      grep -q "Скачать" && open "https://github.com/$REPO/releases/latest"
+  # Нормализуем: убираем префикс v, сравниваем как версии (YYYY.MM.DD-HHMM)
+  norm() { echo "$1" | sed 's/^v//'; }
+  ver_gt() { [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" != "$1" ]; }
+  if [ -n "$LATEST" ]; then
+    CURRENT_NORM="$(norm "$CURRENT")"
+    LATEST_NORM="$(norm "$LATEST")"
+    if [ "$LATEST_NORM" != "$CURRENT_NORM" ] && ver_gt "$LATEST_NORM" "$CURRENT_NORM"; then
+      osascript -e "display alert \"CodePilot: доступна версия $LATEST\" \
+        message \"Установлена: $CURRENT. Скачай новый .pkg с github.com/$REPO/releases/latest\" \
+        buttons {\"Позже\", \"Скачать\"} default button \"Скачать\"" 2>/dev/null | \
+        grep -q "Скачать" && open "https://github.com/$REPO/releases/latest"
+    fi
   fi
 fi
 

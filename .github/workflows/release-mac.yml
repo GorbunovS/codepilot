@@ -17,6 +17,12 @@ jobs:
         with:
           go-version: '1.26'
 
+      - name: Download ONNX Runtime
+        run: ./scripts/download_ort_macos.sh
+
+      - name: Download e5-small model
+        run: ./scripts/download_models.sh
+
       - name: Build .pkg
         run: |
           VERSION="v$(date +%Y.%m.%d-%H%M)"
