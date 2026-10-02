@@ -1,6 +1,9 @@
 package chunk
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 var (
 	vueScriptOpen  = regexp.MustCompile(`(?i)<script[^>]*>`)
@@ -32,7 +35,27 @@ func chunkVue(relPath string, src []byte) []Chunk {
 	}
 	if sStart >= 0 && sEnd > sStart {
 		sub := lines[sStart+1 : sEnd]
-		out = append(out, chunkJSLines(relPath, "vue", sub, sStart+1, hash)...)
+		jsChunks := chunkJSLines(relPath, "vue", sub, sStart+1, hash)
+		out = append(out, jsChunks...)
+		// Vue SFC без export default (<script setup>, Composition API):
+		// компонент не попадает в индекс как символ. Добавляем чанк всего
+		// script-блока с именем файла — get_symbol("NodeCard") находит его.
+		hasComponent := false
+		for _, ch := range jsChunks {
+			if ch.Kind == "component" {
+				hasComponent = true
+				break
+			}
+		}
+		if !hasComponent {
+			sig := "<script>"
+			if sStart+1 < len(lines) {
+				sig = strings.TrimSpace(lines[sStart+1])
+			}
+			ch := newChunk(relPath, "vue", sStart+2, sEnd+1, componentName(relPath), "component", sig, "", lines, hash)
+			ch.Content = strings.Join(sub, "\n")
+			out = append(out, ch)
+		}
 	}
 	if tStart >= 0 && tEnd > tStart {
 		out = append(out, newChunk(relPath, "vue", tStart+1, tEnd+1, "template", "template", "<template>", "", lines, hash))
