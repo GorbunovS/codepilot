@@ -13,7 +13,7 @@ import (
 
 // Version — версия логики чанкинга. Инкрементируйте при изменении чанкеров:
 // индексы, собранные старой версией, пересобираются целиком.
-const Version = 3
+const Version = 4
 
 // Chunk — атомарная единица индекса: символ (функция, тип, класс) или окно.
 type Chunk struct {
@@ -35,10 +35,29 @@ type Chunk struct {
 type Chunker func(relPath string, src []byte) []Chunk
 
 var registry = map[string]Chunker{
-	".go":  chunkGo,
-	".py":  chunkPython,
-	".js":  chunkJS,
-	".vue": chunkVue,
+	".go":    chunkGo,
+	".py":    chunkPython,
+	".js":    chunkJS,
+	".jsx":   chunkJS,
+	".ts":    chunkJS,
+	".tsx":   chunkJS,
+	".vue":   chunkVue,
+	".qml":   chunkQML,
+	".json":  chunkJSON,
+	".md":    chunkMarkdown,
+	".yaml":  chunkYAML,
+	".yml":   chunkYAML,
+	".toml":  chunkTOML,
+	".ini":   chunkINI,
+	".cfg":   chunkINI,
+	".css":   chunkCSS,
+	".scss":  chunkCSS,
+	".less":  chunkCSS,
+	".html":  chunkHTML,
+	".htm":   chunkHTML,
+	".sh":    chunkShell,
+	".bash":  chunkShell,
+	".zsh":   chunkShell,
 }
 
 // SupportedExts возвращает отсортированный список поддерживаемых расширений.

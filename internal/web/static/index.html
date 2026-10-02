@@ -38,6 +38,25 @@
   .tag.ok { background: var(--accent); border-color: var(--accent); }
   .tag.warn { background: #111; color: var(--accent); }
 
+  /* спиннер */
+  @keyframes spin { 100% { transform: rotate(360deg); } }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #ddd; border-top-color: #111; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; }
+  .spinner.sm { width: 10px; height: 10px; border-width: 1px; }
+  .spinner.lg { width: 28px; height: 28px; border-width: 3px; }
+  button .spinner { border-color: #888; border-top-color: #fff; margin-right: 6px; }
+  .overlay { position: fixed; inset: 0; background: rgba(255,255,255,.7); display: flex; align-items: center; justify-content: center; z-index: 100; }
+
+  /* панель логов внизу */
+  .log-panel { position: fixed; bottom: 0; left: 240px; right: 0; background: #fafafa; border-top: 1px solid var(--border); z-index: 50; }
+  .log-panel.collapsed { height: 32px; }
+  .log-panel.expanded { height: 260px; }
+  .log-panel header { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; font-size: 12px; color: var(--muted); cursor: pointer; background: #fff; }
+  .log-panel header:hover { background: #f5f5f5; }
+  .log-panel .chevron { transition: transform .2s; }
+  .log-panel.expanded .chevron { transform: rotate(180deg); }
+  .log-panel pre { margin: 0; height: calc(100% - 32px); padding: 10px 12px; overflow-y: auto; font: 11px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+  .log-panel.empty { color: var(--muted); font-style: italic; }
+
   /* контент */
   .content { flex: 1; overflow-y: auto; padding: 24px; }
   .content h2 { font-size: 18px; margin-bottom: 4px; word-break: break-all; }
@@ -96,7 +115,7 @@
 <body>
 <div id="app">
   <aside class="sidebar">
-    <h1>CodePilot</h1>
+    <h1>CodePilot <span v-if="loading.projects" class="spinner sm" style="float:right;margin-top:2px"></span></h1>
     <div class="proj-list">
       <div v-for="p in projects" :key="p.path" class="proj" :class="{active: p.path === selected}"
            @click="select(p.path)">
@@ -104,10 +123,13 @@
         <span v-if="indexingOf === p.path" class="spin">●</span>
         {{ p.path }}
       </div>
-      <div v-if="!projects.length" class="proj" style="color:#999">проектов нет</div>
+      <div v-if="!projects.length && !loading.projects" class="proj" style="color:#999">проектов нет</div>
+      <div v-if="loading.projects" class="proj" style="color:#999">загрузка проектов…</div>
     </div>
     <footer>
-      <button class="wide" @click="openBrowser">+ Добавить проект</button>
+      <button class="wide" @click="openBrowser" :disabled="loading.projects">
+        <span v-if="loading.browser" class="spinner sm"></span>+ Добавить проект
+      </button>
     </footer>
   </aside>
 
@@ -124,7 +146,7 @@
       </div>
 
       <section>
-        <h3>Обзор</h3>
+        <h3>Обзор <span v-if="loading.stats" class="spinner sm"></span></h3>
         <div v-if="stats.index_error" class="err">{{ stats.index_error }}</div>
         <template v-else-if="stats.index">
           <div class="cards">
@@ -141,17 +163,17 @@
             </div>
           </div>
         </template>
-        <div v-else class="hint">статистика появится после индексации</div>
+        <div v-else-if="!loading.stats" class="hint">статистика появится после индексации</div>
       </section>
 
       <section>
-        <h3>Индексация</h3>
+        <h3>Индексация <span v-if="status.indexing" class="spinner sm"></span></h3>
         <div class="row">
-          <button @click="startIndex" :disabled="status.indexing">
-            {{ status.indexing ? 'Индексация…' : 'Запустить индексацию' }}
+          <button @click="startIndex" :disabled="status.indexing || loading.index">
+            <span v-if="loading.index" class="spinner sm"></span>{{ status.indexing ? 'Индексация…' : 'Запустить индексацию' }}
           </button>
           <button v-if="status.indexing" @click="cancelIndex">Отменить</button>
-          <select v-model="device" :disabled="status.indexing" title="устройство инференса эмбеддингов">
+          <select v-model="device" :disabled="status.indexing || loading.index" title="устройство инференса эмбеддингов">
             <option v-for="d in devices" :key="d.value" :value="d.value">{{ d.label }}</option>
           </select>
           <label class="row" style="gap:5px;cursor:pointer">
@@ -161,14 +183,13 @@
         </div>
         <div class="hint" style="margin-top:6px">индексация на {{ deviceLabel }} · поиск hybrid+rerank с Laya ONNX</div>
         <div class="bar" v-if="status.indexing"><div style="width:100%"></div></div>
-        <pre class="log" v-if="status.log && status.log.length">{{ status.log.join('\n') }}</pre>
         <div v-if="status.last_result" class="sub" :class="{err: status.last_result.startsWith('error')}" style="margin-top:8px">
           {{ status.last_result }}
         </div>
       </section>
 
       <section>
-        <h3>Поиск по проекту</h3>
+        <h3>Поиск по проекту <span v-if="search.loading" class="spinner sm"></span></h3>
         <div class="row">
           <input type="text" v-model="search.query" placeholder="запрос, напр. «где проверяется токен»"
                  style="flex:1;min-width:260px" @keyup.enter="runSearch">
@@ -199,7 +220,7 @@
       </section>
 
       <section>
-        <h3>Нагрузка MCP</h3>
+        <h3>Нагрузка MCP <span v-if="loading.mcp" class="spinner sm"></span></h3>
         <div v-if="stats.mcp && stats.mcp.log_error" class="err">лог вызовов недоступен: {{ stats.mcp.log_error }}</div>
         <template v-else-if="stats.mcp">
           <div class="cards">
@@ -223,7 +244,7 @@
       </section>
 
       <section>
-        <h3>Подключение агента</h3>
+        <h3>Подключение агента <span v-if="loading.skill" class="spinner sm"></span></h3>
         <div class="row" style="margin-bottom:10px">
           <span class="tag" :class="skill.installed ? 'ok' : 'warn'">
             {{ skill.installed ? 'скилл установлен' : 'скилл не установлен' }}
@@ -244,6 +265,18 @@
       </section>
     </template>
   </main>
+
+  <!-- панель логов внизу -->
+  <div class="log-panel" :class="logs.open ? 'expanded' : 'collapsed'" v-if="selected">
+    <header @click="logs.open = !logs.open">
+      <span>
+        <span v-if="status.indexing" class="spinner sm" style="margin-right:6px"></span>
+        Логи индексации
+      </span>
+      <span class="chevron">▾</span>
+    </header>
+    <pre v-if="logs.open"><span class="empty" v-if="!status.log || !status.log.length">пока пусто</span>{{ (status.log || []).join('\n') }}</pre>
+  </div>
 
   <!-- мини-проводник -->
   <div class="modal-bg" v-if="browser.open" @click.self="browser.open = false">
@@ -285,6 +318,8 @@ createApp({
       selected: '',
       stats: {},
       status: { indexing: false, log: [], last_result: '' },
+      loading: { projects: false, browser: false, stats: false, index: false, mcp: false, skill: false },
+      logs: { open: false },
       devices: [{ value: 'cpu', label: 'cpu' }],
       device: 'cpu',
       lowCpu: localStorage.getItem('codepilot.lowCpu') === '1',
@@ -346,9 +381,14 @@ createApp({
       } catch (e) { /* оффлайн-баннер уже показан */ }
     },
     async loadProjects() {
-      const d = await this.api('GET', '/api/projects');
-      this.projects = d.projects || [];
-      if (this.projects.length && !this.selected) this.select(this.projects[0].path);
+      this.loading.projects = true;
+      try {
+        const d = await this.api('GET', '/api/projects');
+        this.projects = d.projects || [];
+        if (this.projects.length && !this.selected) this.select(this.projects[0].path);
+      } finally {
+        this.loading.projects = false;
+      }
     },
     async select(path) {
       this.selected = path;
@@ -365,7 +405,12 @@ createApp({
     },
     async openBrowser() {
       this.browser.open = true;
-      await this.ls(this.browser.path || '');
+      this.loading.browser = true;
+      try {
+        await this.ls(this.browser.path || '');
+      } finally {
+        this.loading.browser = false;
+      }
     },
     async ls(path) {
       try {
@@ -377,26 +422,30 @@ createApp({
     },
     join(base, d) { return base.replace(/[\\/]+$/, '') + '/' + d; },
     async addProject(path) {
+      this.loading.browser = true;
       try {
         const d = await this.api('POST', '/api/projects', { path, device: this.device });
         this.browser.open = false;
         this.projects = d.projects || this.projects;
-        // путь из проводника уже абсолютный (его вернул сервер)
         const added = this.projects.find(p => p.path === path)
           || this.projects[this.projects.length - 1];
         if (added) await this.select(added.path);
-        // автозапуск индексации на сервере: сразу показываем прогресс
         if (d.indexing) this.startPoll();
         if (d.skill && d.skill.skills_dir && !d.skill.installed) {
-          this.skill = d.skill; // секция «Подключение агента» подсветит установку
+          this.skill = d.skill;
         }
-      } catch (e) { /* например, дубликат — сервер ответил ok */ }
+      } finally {
+        this.loading.browser = false;
+      }
     },
     async startIndex() {
+      this.loading.index = true;
       try {
         await this.api('POST', '/api/index', { path: this.selected, device: this.device, low_cpu: this.lowCpu });
+        this.logs.open = true;
         this.startPoll();
       } catch (e) { /* конфликт «уже идёт» — статус подтянется поллингом */ }
+      this.loading.index = false;
     },
     async cancelIndex() {
       try {
@@ -415,8 +464,6 @@ createApp({
       }, 2000);
     },
     stopPoll() { if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; } },
-    // idleRefresh — фоновое обновление дашборда, пока проект выбран
-    // (дешёво: индекс кэширован на сервере).
     async idleRefresh() {
       if (!this.selected || this.offline || this.pollTimer) return;
       try { await Promise.all([this.loadStatus(), this.loadStats()]); } catch (e) { /* оффлайн */ }
@@ -429,8 +476,13 @@ createApp({
     },
     async loadStats() {
       if (!this.selected) return;
-      this.stats = await this.api('GET', '/api/stats?path=' + encodeURIComponent(this.selected));
-      this.$nextTick(() => this.drawCharts());
+      this.loading.stats = true;
+      try {
+        this.stats = await this.api('GET', '/api/stats?path=' + encodeURIComponent(this.selected));
+        this.$nextTick(() => this.drawCharts());
+      } finally {
+        this.loading.stats = false;
+      }
     },
     async loadSnippet() {
       if (!this.selected) return;
@@ -439,13 +491,20 @@ createApp({
     },
     async loadSkillStatus() {
       if (!this.selected) return;
-      this.skill = await this.api('GET', '/api/skill/status?path=' + encodeURIComponent(this.selected));
+      this.loading.skill = true;
+      try {
+        this.skill = await this.api('GET', '/api/skill/status?path=' + encodeURIComponent(this.selected));
+      } finally {
+        this.loading.skill = false;
+      }
     },
     async installSkill() {
+      this.loading.skill = true;
       try {
         const d = await this.api('POST', '/api/skill/install', { path: this.selected });
         this.skill = d.skill || this.skill;
       } catch (e) { this.search.error = e.message; }
+      this.loading.skill = false;
     },
     async downloadSkill() {
       const d = await this.api('GET', '/api/skill');

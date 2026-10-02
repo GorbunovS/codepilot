@@ -2,15 +2,15 @@
 """Сборка macOS-установщика codepilot (.pkg).
 
 Что внутри:
-- CodePilot.app: Go-бинарь, bin/libonnxruntime.dylib, models/e5-small,
-  скрипты первичной настройки, иконка, лаунчер.
+- CodePilot.app: Pake-окно (Tauri) поверх веб-панели + Go-бинарь,
+  bin/libonnxruntime.dylib, models/e5-small, скрипты первичной настройки.
+  Точка входа — наш лаунчер (Contents/MacOS/CodePilot): поднимает Postgres,
+  готовит модели, запускает `codepilot web` и только потом открывает окно
+  (Contents/MacOS/CodePilot-web — переименованный Pake-бинарь). Поэтому
+  белого экрана нет: окно открывается, когда панель уже отвечает.
 - postinstall: снимает карантин и чинит владельца.
 
-При первом запуске лаунчер:
-- ставит Postgres (Docker pgvector/pgvector:pg17 → brew postgresql@17),
-- копирует вшитый e5-small в ~/.codepilot/models/,
-- скачивает готовый Laya ONNX с HuggingFace в ~/.codepilot/models/,
-- запускает web-панель и открывает браузер.
+Требования на машине сборки: Go, Node.js + pnpm, Rust (для Pake/Tauri).
 
 Сборка:
     python3 scripts/build_macos.py
@@ -28,6 +28,8 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -58,27 +60,8 @@ def build_go_binary():
     run(["go", "build", "-o", "codepilot_macos", "./cmd/codepilot"], cwd=ROOT, env=env)
 
 
-def make_icon(work: Path) -> Path | None:
-    src = ROOT / "logo.png"
-    if not src.exists():
-        print("WARNING: logo.png не найден, иконка стандартная")
-        return None
-    iconset = work / "logo.iconset"
-    iconset.mkdir(parents=True, exist_ok=True)
-    for size in (16, 32, 128, 256, 512):
-        run(["sips", "-z", str(size), str(size), str(src),
-             "--out", str(iconset / f"icon_{size}x{size}.png")],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        run(["sips", "-z", str(size * 2), str(size * 2), str(src),
-             "--out", str(iconset / f"icon_{size}x{size}@2x.png")],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    icns = work / "logo.icns"
-    run(["iconutil", "-c", "icns", str(iconset), "-o", str(icns)])
-    return icns
-
-
 LAUNCHER = r"""#!/bin/bash
-# CodePilot launcher: проверка обновлений -> настройка окружения -> web -> браузер.
+# CodePilot launcher: проверка обновлений -> настройка окружения -> web -> окно Pake.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RES="$HERE/../Resources"
@@ -164,22 +147,101 @@ for i in $(seq 1 120); do
   sleep 0.5
 done
 
-open "http://__ADDR__"
-wait $WEB_PID
+# Панель поднялась — открываем десктоп-окно (Pake). Когда окно закрывается,
+# trap гасит web-сервер (поэтому без exec — ждём завершения окна).
+"$HERE/CodePilot-web"
 """
 
 
+def find_pake_apps(pake_dir: Path) -> list[Path]:
+    """Ищет собранные .app в build-дереве Pake (через симлинки pnpm)."""
+    apps = []
+    for dirpath, dirnames, _ in os.walk(pake_dir, followlinks=True):
+        if "/bundle/macos" not in dirpath.replace(os.sep, "/"):
+            continue
+        apps += [Path(dirpath) / d for d in dirnames if d.endswith(".app")]
+    return sorted(apps)
+
+
+def build_pake_app(work: Path) -> Path:
+    """Собирает Pake/Tauri-обёртку поверх панели и возвращает путь к .app.
+
+    Pake при сборке обращается к URL панели (иконка/метаданные), поэтому
+    на время сборки поднимаем `codepilot web` на ADDR. Сборка идёт в
+    изолированном каталоге work/pake, чтобы node_modules не валялись в репо.
+
+    Важно: после сборки .app tauri-bundler пакует dmg и удаляет .app
+    («Cleaning .../bundle/macos/CodePilot.app»). Поэтому читаем вывод
+    построчно и копируем .app в сторону, как только началась dmg-стадия.
+    """
+    print("Собираю Pake-окно (нужны Node + pnpm + Rust, первый раз долго)...")
+    web = subprocess.Popen(
+        [str(ROOT / "codepilot_macos"), "web", "--addr", ADDR],
+        cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        for _ in range(120):
+            try:
+                urllib.request.urlopen(f"http://{ADDR}/api/projects", timeout=1)
+                break
+            except Exception:
+                time.sleep(0.5)
+        pake_dir = work / "pake"
+        pake_dir.mkdir()
+        run(["pnpm", "init"], cwd=pake_dir)
+        run(["pnpm", "add", "pake-cli"], cwd=pake_dir)
+        cmd = [
+            "pnpm", "exec", "pake", f"http://{ADDR}",
+            "--name", APP_NAME, "--width", "1280", "--height", "840",
+        ]
+        if (ROOT / "logo.png").exists():
+            cmd += ["--icon", str(ROOT / "logo.png")]
+        print("  $", " ".join(cmd))
+        proc = subprocess.Popen(
+            cmd, cwd=pake_dir,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        saved = work / "pake_app"
+        app_copy = None
+        for line in proc.stdout:
+            print(line, end="")
+            if app_copy is None and "Bundling" in line and ".dmg" in line:
+                # dmg-стадия: .app собран и подписан, дальше его удалят.
+                found = find_pake_apps(pake_dir)
+                if found:
+                    saved.mkdir()
+                    app_copy = saved / found[0].name
+                    shutil.copytree(found[0], app_copy, symlinks=True)
+        proc.wait()
+        if app_copy is None:
+            # dmg-стадии не было (конфиг без dmg) — .app должен остаться.
+            found = find_pake_apps(pake_dir)
+            if not found:
+                raise RuntimeError("Pake не произвёл .app — см. вывод выше")
+            saved.mkdir()
+            app_copy = saved / found[0].name
+            shutil.copytree(found[0], app_copy, symlinks=True)
+        return app_copy
+    finally:
+        web.terminate()
+
+
 def assemble_app(work: Path) -> Path:
+    # База — собранное Pake-приложение.
     app = work / f"{APP_NAME}.app"
+    shutil.move(str(build_pake_app(work)), app)
     macos = app / "Contents" / "MacOS"
     res = app / "Contents" / "Resources"
-    macos.mkdir(parents=True)
-    res.mkdir(parents=True)
+
+    # Pake-бинарь отступает на CodePilot-web, точкой входа становится лаунчер.
+    pake_bins = [p for p in macos.iterdir() if p.is_file() and os.access(p, os.X_OK)]
+    if len(pake_bins) != 1:
+        raise RuntimeError(f"ожидался один бинарь в {macos}, есть: {pake_bins}")
+    shutil.move(str(pake_bins[0]), macos / "CodePilot-web")
 
     # бинарь и либы
-    shutil.copy2(ROOT / "codepilot_macos", res / "bin_codepilot_tmp")
-    (res / "bin").mkdir()
-    shutil.move(str(res / "bin_codepilot_tmp"), res / "bin" / "codepilot")
+    (res / "bin").mkdir(exist_ok=True)
+    shutil.copy2(ROOT / "codepilot_macos", res / "bin" / "codepilot")
     dylib = ROOT / "bin" / "libonnxruntime.dylib"
     real = ROOT / "bin" / "libonnxruntime.1.23.1.dylib"
     if real.exists():
@@ -191,17 +253,17 @@ def assemble_app(work: Path) -> Path:
     # e5-small вшиваем (470 МБ), Laya докачивается при первом запуске
     e5 = ROOT / "models" / "e5-small"
     if e5.exists():
-        shutil.copytree(e5, res / "models" / "e5-small")
+        shutil.copytree(e5, res / "models" / "e5-small", dirs_exist_ok=True)
     else:
         print("WARNING: models/e5-small не найден — скачается при первом запуске")
 
     # скрипты первичной настройки
     sdir = res / "scripts"
-    sdir.mkdir()
+    sdir.mkdir(exist_ok=True)
     for name in ("setup_postgres.py", "setup_models.py"):
         shutil.copy2(ROOT / "scripts" / name, sdir / name)
 
-    # лаунчер
+    # лаунчер — точка входа
     launcher = macos / APP_NAME
     launcher.write_text(
         LAUNCHER.replace("__ADDR__", ADDR).replace("__REPO__", REPO),
@@ -212,25 +274,25 @@ def assemble_app(work: Path) -> Path:
     # версия для проверки обновлений
     (res / "version.txt").write_text(VERSION, encoding="utf-8")
 
-    # иконка
-    icon = make_icon(work)
-
-    plist = {
+    # Правим plist Pake: точка входа — лаунчер, версия — наша. Иконку,
+    # бандл-идентификатор и прочее Pake уже выставил (иконка — из --icon).
+    plist_path = app / "Contents" / "Info.plist"
+    with open(plist_path, "rb") as f:
+        plist = plistlib.load(f)
+    plist.update({
         "CFBundleName": APP_NAME,
         "CFBundleDisplayName": APP_NAME,
         "CFBundleIdentifier": BUNDLE_ID,
         "CFBundleVersion": VERSION,
         "CFBundleShortVersionString": VERSION,
         "CFBundleExecutable": APP_NAME,
-        "CFBundlePackageType": "APPL",
-        "LSMinimumSystemVersion": "12.0",
-        "NSHighResolutionCapable": True,
-    }
-    if icon:
-        shutil.copy2(icon, res / "logo.icns")
-        plist["CFBundleIconFile"] = "logo"
-    with open(app / "Contents" / "Info.plist", "wb") as f:
+    })
+    with open(plist_path, "wb") as f:
         plistlib.dump(plist, f)
+
+    # Мы изменили бандл после подписи Pake — переподписываем ad-hoc,
+    # иначе Gatekeeper скажет «приложение повреждено».
+    run(["codesign", "--force", "--deep", "--sign", "-", str(app)])
     return app
 
 
