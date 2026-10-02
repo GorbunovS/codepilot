@@ -19,9 +19,32 @@ permissions:
   contents: write
 
 jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      build_mac: ${{ steps.platform.outputs.build_mac }}
+      build_win: ${{ steps.platform.outputs.build_win }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: platform
+        shell: bash
+        run: |
+          msg="${{ github.event.head_commit.message }}"
+          if [[ "$msg" == *"[mac-only]"* ]]; then
+            echo "build_mac=true" >> "$GITHUB_OUTPUT"
+            echo "build_win=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$msg" == *"[win-only]"* ]]; then
+            echo "build_mac=false" >> "$GITHUB_OUTPUT"
+            echo "build_win=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_mac=true" >> "$GITHUB_OUTPUT"
+            echo "build_win=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build-mac:
     runs-on: macos-latest
-    if: github.event_name == 'push' || inputs.platform == 'mac' || inputs.platform == 'both'
+    needs: detect
+    if: (github.event_name == 'push' && needs.detect.outputs.build_mac == 'true') || inputs.platform == 'mac' || inputs.platform == 'both'
     steps:
       - uses: actions/checkout@v4
 
@@ -64,7 +87,8 @@ jobs:
 
   build-win:
     runs-on: windows-latest
-    if: github.event_name == 'push' || inputs.platform == 'win' || inputs.platform == 'both'
+    needs: detect
+    if: (github.event_name == 'push' && needs.detect.outputs.build_win == 'true') || inputs.platform == 'win' || inputs.platform == 'both'
     steps:
       - uses: actions/checkout@v4
 
@@ -84,7 +108,11 @@ jobs:
         run: rustup default stable
 
       - name: Install Inno Setup
-        run: choco install innosetup --no-progress -y
+        run: |
+          $url = "https://files.jrsoftware.org/is/6/innosetup-6.2.2.exe"
+          Invoke-WebRequest -Uri $url -OutFile "is.exe"
+          Start-Process -FilePath "is.exe" -ArgumentList "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
+          Remove-Item "is.exe"
 
       - name: Install PyInstaller
         run: pip install pyinstaller
