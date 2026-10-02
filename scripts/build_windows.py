@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Сборка Windows-установщика codepilot (Inno Setup).
+"""Windows installer builder for codepilot (Inno Setup).
 
-Что внутри:
-- CodePilot.exe: Pake-окно (Tauri) поверх веб-панели + Go-бинарь,
-  bin/onnxruntime.dll, models/e5-small, скрипты первичной настройки.
-  Точка входа — CodePilot.exe (скомпилированный launcher.py): поднимает
-  `codepilot web` и открывает окно. Настройка моделей/Postgres — после
-  старта приложения (onboarding UI).
-- Inno Setup-установщик: CodePilot-Setup.exe.
+Contents:
+- CodePilot.exe: Pake window (Tauri) over web panel + Go binary,
+  bin/onnxruntime.dll, models/e5-small, first-run setup scripts.
+  Entry point is CodePilot.exe (compiled launcher.py): starts
+  `codepilot web` and opens the window. Models/Postgres setup happens after
+  app start (onboarding UI).
+- Inno Setup installer: CodePilot-Setup.exe.
 
-Требования на машине сборки: Go, Node.js + pnpm, Rust (для Pake/Tauri),
+Build machine requirements: Go, Node.js + pnpm, Rust (for Pake/Tauri),
 Python + PyInstaller, Inno Setup (iscc).
 
-Сборка:
+Build:
     python scripts/build_windows.py
 
-Результат: installers/windows/CodePilot-Setup.exe (gitignored).
+Result: installers/windows/CodePilot-Setup.exe (gitignored).
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_NAME = "CodePilot"
-DEFAULT_VERSION = ""  # авто: дата сборки YYYY.MM.DD-HHMM
+DEFAULT_VERSION = ""  # auto: build date YYYY.MM.DD-HHMM
 ADDR = "127.0.0.1:8080"
 REPO = "GorbunovS/codepilot"
 ORT_VERSION = "1.23.1"
@@ -45,12 +45,12 @@ def run(cmd: list[str | Path], **kwargs):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--version", default=DEFAULT_VERSION, help="версия сборки (пусто = авто YYYY.MM.DD-HHMM)")
+    p.add_argument("--version", default=DEFAULT_VERSION, help="build version (empty = auto YYYY.MM.DD-HHMM)")
     return p.parse_args()
 
 
 def build_go_binary():
-    print("Собираю codepilot.exe (windows/amd64)...")
+    print("Building codepilot.exe (windows/amd64)...")
     env = os.environ.copy()
     env["CGO_ENABLED"] = "0"
     env["GOOS"] = "windows"
@@ -61,9 +61,9 @@ def build_go_binary():
 def ensure_ort_windows():
     dll = ROOT / "bin" / "onnxruntime.dll"
     if dll.exists():
-        print("есть onnxruntime.dll")
+        print("onnxruntime.dll already present")
         return
-    print("Скачиваю ONNX Runtime для Windows...")
+    print("Downloading ONNX Runtime for Windows...")
     tmp = Path(tempfile.gettempdir())
     zip_path = tmp / f"onnxruntime-win-x64-{ORT_VERSION}.zip"
     if not zip_path.exists():
@@ -71,7 +71,7 @@ def ensure_ort_windows():
             f"https://github.com/microsoft/onnxruntime/releases/download/"
             f"v{ORT_VERSION}/onnxruntime-win-x64-{ORT_VERSION}.zip"
         )
-        print(f"скачиваю {url} -> {zip_path}")
+        print(f"downloading {url} -> {zip_path}")
         urllib.request.urlretrieve(url, zip_path)
     extract = tmp / f"ort-win-{ORT_VERSION}"
     if extract.exists():
@@ -82,17 +82,17 @@ def ensure_ort_windows():
     (ROOT / "bin").mkdir(parents=True, exist_ok=True)
     for f in src_dir.glob("onnxruntime*"):
         shutil.copy2(f, ROOT / "bin" / f.name)
-    print(f"скопировано в {ROOT / 'bin'}")
+    print(f"copied to {ROOT / 'bin'}")
 
 
 def ensure_models():
-    print("Скачиваю модели (e5-small)...")
+    print("Downloading models (e5-small)...")
     setup = ROOT / "scripts" / "setup_models.py"
     run([sys.executable, str(setup)], cwd=ROOT)
 
 
 def find_pake_exe(pake_dir: Path) -> Path | None:
-    """Ищет собранный .exe Pake в build-дереве."""
+    """Finds built Pake .exe in build tree."""
     candidates = [
         pake_dir / "src-tauri" / "target" / "release" / f"{APP_NAME}.exe",
         pake_dir / "src-tauri" / "target" / "x86_64-pc-windows-msvc" / "release" / f"{APP_NAME}.exe",
@@ -100,7 +100,7 @@ def find_pake_exe(pake_dir: Path) -> Path | None:
     for c in candidates:
         if c.exists():
             return c
-    # fallback: рекурсивный поиск
+    # fallback: recursive search
     for p in pake_dir.rglob(f"{APP_NAME}.exe"):
         if "bundle" not in str(p):
             return p
@@ -108,8 +108,8 @@ def find_pake_exe(pake_dir: Path) -> Path | None:
 
 
 def build_pake_app(work: Path) -> Path:
-    """Собирает Pake/Tauri-обёртку поверх панели и возвращает путь к .exe."""
-    print("Собираю Pake-окно (нужны Node + pnpm + Rust, первый раз долго)...")
+    """Builds Pake/Tauri wrapper over the panel and returns path to .exe."""
+    print("Building Pake window (Node + pnpm + Rust required, first run is slow)...")
     web = subprocess.Popen(
         [str(ROOT / "codepilot_windows.exe"), "web", "--addr", ADDR],
         cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -135,15 +135,15 @@ def build_pake_app(work: Path) -> Path:
         subprocess.run(cmd, cwd=pake_dir, check=True)
         exe = find_pake_exe(pake_dir)
         if exe is None:
-            raise RuntimeError("Pake не произвёл .exe — см. вывод выше")
+            raise RuntimeError("Pake did not produce .exe — see output above")
         return exe
     finally:
         web.terminate()
 
 
 def build_launcher_exe(work: Path) -> Path:
-    """Собирает launcher.py в CodePilot.exe через PyInstaller."""
-    print("Собираю CodePilot.exe (PyInstaller)...")
+    """Builds launcher.py into CodePilot.exe via PyInstaller."""
+    print("Building CodePilot.exe (PyInstaller)...")
     launcher = ROOT / "scripts" / "launcher.py"
     run([
         sys.executable, "-m", "PyInstaller",
@@ -157,51 +157,51 @@ def build_launcher_exe(work: Path) -> Path:
     ], cwd=ROOT)
     exe = work / f"{APP_NAME}.exe"
     if not exe.exists():
-        raise RuntimeError(f"PyInstaller не произвёл {exe}")
+        raise RuntimeError(f"PyInstaller did not produce {exe}")
     return exe
 
 
 def assemble_dir(work: Path) -> Path:
-    """Собирает папку CodePilot-Windows со всем содержимым."""
+    """Builds CodePilot-Windows directory with all contents."""
     out = work / f"{APP_NAME}-Windows"
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
 
-    # Pake-окно — точка входа, переименованный лаунчер.
+    # Pake window - entry point renamed launcher.
     pake_exe = build_pake_app(work)
     shutil.copy2(pake_exe, out / f"{APP_NAME}-web.exe")
 
-    # Лаунчер — CodePilot.exe (точка входа).
+    # Launcher - CodePilot.exe (entry point).
     launcher_exe = build_launcher_exe(work)
     shutil.copy2(launcher_exe, out / f"{APP_NAME}.exe")
 
-    # Go-бинарь и ORT.
+    # Go binary and ORT.
     shutil.copy2(ROOT / "codepilot_windows.exe", out / "codepilot.exe")
     if (ROOT / "bin").exists():
         shutil.copytree(ROOT / "bin", out / "bin", dirs_exist_ok=True)
 
-    # e5-small вшиваем (470 МБ), Laya докачивается после старта.
+    # e5-small is bundled (~470 MB), Laya is downloaded after start.
     e5 = ROOT / "models" / "e5-small"
     if e5.exists():
         shutil.copytree(e5, out / "models" / "e5-small", dirs_exist_ok=True)
     else:
-        print("WARNING: models/e5-small не найден — скачается при первом запуске")
+        print("WARNING: models/e5-small not found — will be downloaded on first run")
 
-    # Скрипты первичной настройки.
+    # First-run setup scripts.
     sdir = out / "scripts"
     sdir.mkdir(exist_ok=True)
     for name in ("setup_postgres.py", "setup_models.py"):
         shutil.copy2(ROOT / "scripts" / name, sdir / name)
 
-    # Версия для проверки обновлений.
+    # Version for update checks.
     (out / "version.txt").write_text(VERSION, encoding="utf-8")
     return out
 
 
 def build_installer(app_dir: Path, work: Path) -> Path:
-    """Собирает Inno Setup-установщик."""
-    print("Собираю Inno Setup-установщик...")
+    """Builds Inno Setup installer."""
+    print("Building Inno Setup installer...")
     iss = work / "codepilot.iss"
     iss.write_text(f"""
 [Setup]
@@ -222,12 +222,12 @@ Name: "{{group}}\\{APP_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"
 Name: "{{autodesktop}}\\{APP_NAME}"; Filename: "{{app}}\\{APP_NAME}.exe"
 
 [Run]
-Filename: "{{app}}\\{APP_NAME}.exe"; Description: "Запустить {APP_NAME}"; Flags: nowait postinstall skipifsilent
+Filename: "{{app}}\\{APP_NAME}.exe"; Description: "Run {APP_NAME}"; Flags: nowait postinstall skipifsilent
 """, encoding="utf-8")
     out = ROOT / "installers" / "windows" / "CodePilot-Setup.exe"
     out.parent.mkdir(parents=True, exist_ok=True)
     run(["iscc", str(iss)], cwd=ROOT)
-    # JSON-метаданные для CI / ручной проверки
+    # JSON metadata for CI / manual checks
     meta = {
         "version": VERSION,
         "download_url": f"https://github.com/{REPO}/releases/latest/download/CodePilot-Setup.exe",
@@ -246,9 +246,9 @@ def main():
     if not VERSION:
         from datetime import datetime
         VERSION = datetime.now().strftime("%Y.%m.%d-%H%M")
-        print(f"автоверсия: {VERSION}")
+        print(f"auto version: {VERSION}")
     if sys.platform != "win32":
-        print("сборка Windows-установщика возможна только на Windows")
+        print("Windows installer build is only possible on Windows")
         sys.exit(1)
     build_go_binary()
     ensure_ort_windows()
@@ -259,9 +259,9 @@ def main():
         setup = build_installer(app_dir, work)
     (ROOT / "codepilot_windows.exe").unlink(missing_ok=True)
     size_mb = setup.stat().st_size / 2**20
-    print(f"\nГотово: {setup} ({size_mb:.0f} МБ)")
-    print("Коллеге: запустить CodePilot-Setup.exe → установка → запуск из меню Пуск.")
-    print("При первом запуске скачается модель Laya и настроится Postgres.")
+    print(f"\nDone: {setup} ({size_mb:.0f} MB)")
+    print("For colleague: run CodePilot-Setup.exe → install → launch from Start menu.")
+    print("Laya model will be downloaded and Postgres will be configured on first run.")
 
 
 if __name__ == "__main__":
