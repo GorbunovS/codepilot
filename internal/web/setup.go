@@ -99,10 +99,13 @@ func modelsReady(modelsDir string) map[string]bool {
 		d = modelsRoot()
 	}
 	layaDir := filepath.Join(d, "laya-multilingual")
-	// Модель с внешними весами: laya.onnx маленький (~3 МБ), основной вес —
-	// laya.onnx.data (~1.3 ГБ). Без .data модель пустая и даёт низкие score.
-	layaOK := fileExists(filepath.Join(layaDir, "laya.onnx")) &&
-		fileExists(filepath.Join(layaDir, "laya.onnx.data"))
+	layaPath := filepath.Join(layaDir, "laya.onnx")
+	// Монолитная модель с HF — ~1.2 ГБ. Если laya.onnx маленький (< 10 МБ),
+	// это модель с внешними весами (laya.onnx.data), и она неполная.
+	layaOK := false
+	if fi, err := os.Stat(layaPath); err == nil {
+		layaOK = fi.Size() > 10<<20 // 10 МБ — порог полноты
+	}
 	return map[string]bool{
 		"e5":  fileExists(filepath.Join(d, "e5-small", "model.onnx")),
 		"laya": layaOK,

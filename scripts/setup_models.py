@@ -40,15 +40,17 @@ def ensure_e5():
 
 def ensure_laya():
     laya_dir = MODELS_DIR / "laya-multilingual"
-    if (laya_dir / "laya.onnx").exists() and (laya_dir / "laya.onnx.data").exists():
-        print(f"есть: {laya_dir / 'laya.onnx'} (+ data)")
+    laya_path = laya_dir / "laya.onnx"
+    # Монолитная модель с HF — ~1.2 ГБ. Если laya.onnx маленький (< 10 МБ),
+    # это модель с внешними весами (без laya.onnx.data) — перекачиваем.
+    if laya_path.exists() and laya_path.stat().st_size > 10 * 1024 * 1024:
+        print(f"есть: {laya_path} ({laya_path.stat().st_size / 2**20:.0f} МБ)")
         return
 
     # Готовый ONNX (без локального экспорта — не нужен torch).
     onnx_base = "https://huggingface.co/yehor-oleksiuk/laya-multilingual-onnx/resolve/main"
     files = {
         "laya.onnx": f"{onnx_base}/model_fp32.onnx",
-        "laya.onnx.data": f"{onnx_base}/model_fp32.onnx.data",
         "tokenizer.json": f"{onnx_base}/tokenizer.json",
         "tokenizer_config.json": f"{onnx_base}/tokenizer_config.json",
     }
