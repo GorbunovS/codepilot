@@ -30,10 +30,11 @@ jobs:
         shell: bash
         run: |
           msg="${{ github.event.head_commit.message }}"
-          if [[ "$msg" == *"[mac-only]"* ]]; then
+          msg="${msg//$'\n'/ }"
+          if grep -qE '(^|[[:space:]])\[mac-only\]($|[[:space:]])' <<< "$msg"; then
             echo "build_mac=true" >> "$GITHUB_OUTPUT"
             echo "build_win=false" >> "$GITHUB_OUTPUT"
-          elif [[ "$msg" == *"[win-only]"* ]]; then
+          elif grep -qE '(^|[[:space:]])\[win-only\]($|[[:space:]])' <<< "$msg"; then
             echo "build_mac=false" >> "$GITHUB_OUTPUT"
             echo "build_win=true" >> "$GITHUB_OUTPUT"
           else
