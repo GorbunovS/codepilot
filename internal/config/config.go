@@ -134,12 +134,20 @@ func SaveProjects(list []Project) error {
 }
 
 // DefaultName — имя проекта по умолчанию: basename нормализованного пути.
-func DefaultName(path string) string {
-	norm := strings.TrimRight(filepath.ToSlash(path), "/")
+// Разделители обеих ОС обрабатываются явно: filepath на unix не считает
+// '\' разделителем, а путь могли записать на Windows.
+func DefaultName(p string) string {
+	norm := strings.TrimRight(strings.ReplaceAll(p, "\\", "/"), "/")
 	if norm == "" {
 		return "project"
 	}
-	return filepath.Base(norm)
+	if i := strings.LastIndex(norm, "/"); i >= 0 {
+		norm = norm[i+1:]
+	}
+	if norm == "" {
+		return "project"
+	}
+	return norm
 }
 
 // Find ищет проект по имени (точное, затем без регистра) или по пути.

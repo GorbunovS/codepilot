@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Установка/запуск локального PostgreSQL + pgvector для codepilot.
 
-Кроссплатформенный скрипт (Windows-first для MVP). Не требует Docker.
-При первом запуске скачивает бинарники Postgres и расширение pgvector,
-инициализирует data dir, запускает сервер и создаёт БД codepilot.
+Windows: скачивает бинарники Postgres и pgvector, initdb, старт сервера.
+macOS: Docker (pgvector/pgvector:pg17) → brew (postgresql@17 + pgvector) →
+       уже запущенный Postgres на 5432 используется как есть.
 
 Запуск:
     python scripts/setup_postgres.py
@@ -53,12 +53,11 @@ def download(url: str, dest: Path):
 
 
 def pg_ready() -> bool:
-    """Проверяет, слушает ли Postgres на 127.0.0.1:5432."""
+    """Проверяет, слушает ли Postgres на 127.0.0.1:5432 (только TCP-connect)."""
     import socket
     try:
-        with socket.create_connection(("127.0.0.1", int(PORT)), timeout=1) as s:
-            s.recv(1)
-        return True
+        with socket.create_connection(("127.0.0.1", int(PORT)), timeout=1):
+            return True
     except OSError:
         return False
 
@@ -170,7 +169,10 @@ def setup_windows():
 
     dsn = f"postgres://{DB_USER}:{DB_PASS}@127.0.0.1:{PORT}/{DB_NAME}?sslmode=disable"
     print(f"\nготово: {dsn}")
+    save_config(dsn)
 
+
+def save_config(dsn: str):
     config = home_dir() / "config.json"
     cfg = {}
     if config.exists():
@@ -181,5 +183,122 @@ def setup_windows():
     print(f"сохранено в {config}")
 
 
+def wait_pg(timeout: int = 60):
+    for _ in range(timeout * 2):
+        if pg_ready():
+            return True
+        import time
+        time.sleep(0.5)
+    return False
+
+
+def setup_macos_docker() -> bool:
+    """Postgres в Docker: образ pgvector/pgvector:pg17, контейнер codepilot-pg."""
+    if not shutil.which("docker"):
+        return False
+    r = subprocess.run(["docker", "info"], capture_output=True)
+    if r.returncode != 0:
+        print("docker установлен, но демон не запущен (открой Docker Desktop)")
+        return False
+    name = "codepilot-pg"
+    r = subprocess.run(["docker", "inspect", name], capture_output=True)
+    if r.returncode == 0:
+        run(["docker", "start", name])
+    else:
+        run([
+            "docker", "run", "-d", "--name", name,
+            "-e", f"POSTGRES_USER={DB_USER}",
+            "-e", f"POSTGRES_PASSWORD={DB_PASS}",
+            "-e", f"POSTGRES_DB={DB_NAME}",
+            "-p", f"{PORT}:5432",
+            "-v", f"{home_dir() / 'pgdata-docker'}:/var/lib/postgresql/data",
+            "--restart", "unless-stopped",
+            f"pgvector/pgvector:pg{PG_MAJOR}",
+        ])
+    print("жду готовности Postgres...")
+    if not wait_pg():
+        raise RuntimeError("Postgres в Docker не поднялся за 60 с")
+    # CREATE EXTENSION — от суперпользователя контейнера
+    r = subprocess.run(
+        ["docker", "exec", name, "psql", "-U", DB_USER, "-d", DB_NAME,
+         "-c", "CREATE EXTENSION IF NOT EXISTS vector;"],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0 and "permission" in r.stderr.lower():
+        run(["docker", "exec", name, "psql", "-U", DB_USER, "-d", "postgres",
+             "-c", f"ALTER USER {DB_USER} WITH SUPERUSER;"])
+        run(["docker", "exec", name, "psql", "-U", DB_USER, "-d", DB_NAME,
+             "-c", "CREATE EXTENSION IF NOT EXISTS vector;"])
+    elif r.returncode != 0:
+        print(r.stderr)
+        raise RuntimeError("CREATE EXTENSION vector не удался")
+    return True
+
+
+def setup_macos_brew() -> bool:
+    """Postgres через Homebrew: postgresql@17 + pgvector."""
+    brew = shutil.which("brew")
+    if not brew:
+        return False
+    run([brew, "install", f"postgresql@{PG_MAJOR}", "pgvector"])
+    run([brew, "services", "start", f"postgresql@{PG_MAJOR}"])
+    print("жду готовности Postgres...")
+    if not wait_pg():
+        raise RuntimeError("Postgres (brew) не поднялся за 60 с")
+    prefix = subprocess.run(
+        [brew, "--prefix", f"postgresql@{PG_MAJOR}"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    psql = str(Path(prefix) / "bin" / "psql")
+    env = os.environ.copy()
+    env["PGPASSWORD"] = DB_PASS
+    try:
+        subprocess.run([psql, "-d", "postgres", "-c",
+                        f"CREATE USER {DB_USER} WITH PASSWORD '{DB_PASS}' SUPERUSER;"],
+                       check=True, env=env, capture_output=True)
+    except subprocess.CalledProcessError:
+        print(f"пользователь {DB_USER} уже существует, обновляю пароль")
+        subprocess.run([psql, "-d", "postgres", "-c",
+                        f"ALTER USER {DB_USER} WITH PASSWORD '{DB_PASS}' SUPERUSER;"],
+                       check=True, env=env)
+    try:
+        subprocess.run([psql, "-d", "postgres", "-c",
+                        f"CREATE DATABASE {DB_NAME} OWNER {DB_USER};"],
+                       check=True, env=env, capture_output=True)
+    except subprocess.CalledProcessError:
+        print(f"база {DB_NAME} уже существует")
+    run([psql, "-d", DB_NAME, "-c", "CREATE EXTENSION IF NOT EXISTS vector;"], env=env)
+    return True
+
+
+def setup_macos():
+    if pg_ready():
+        print("Postgres уже слушает 5432 — проверяю pgvector и БД...")
+        # Пробуем docker-контейнер, если он наш; иначе считаем внешний PG готовым
+        if shutil.which("docker") and subprocess.run(
+            ["docker", "inspect", "codepilot-pg"], capture_output=True
+        ).returncode == 0:
+            subprocess.run(
+                ["docker", "exec", "codepilot-pg", "psql", "-U", DB_USER, "-d", DB_NAME,
+                 "-c", "CREATE EXTENSION IF NOT EXISTS vector;"],
+                capture_output=True,
+            )
+    elif not setup_macos_docker():
+        print("Docker недоступен — ставлю Postgres через Homebrew...")
+        if not setup_macos_brew():
+            print("ERROR: нет ни Docker, ни Homebrew. Установи Docker Desktop:")
+            print("  https://www.docker.com/products/docker-desktop/")
+            sys.exit(1)
+    dsn = f"postgres://{DB_USER}:{DB_PASS}@127.0.0.1:{PORT}/{DB_NAME}?sslmode=disable"
+    print(f"\nготово: {dsn}")
+    save_config(dsn)
+
+
 if __name__ == "__main__":
-    setup_windows()
+    if platform.system() == "Windows":
+        setup_windows()
+    elif platform.system() == "Darwin":
+        setup_macos()
+    else:
+        print(f"неподдерживаемая ОС: {platform.system()} (Windows/macOS)")
+        sys.exit(1)

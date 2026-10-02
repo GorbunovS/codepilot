@@ -10,8 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"codepilot/internal/index"
@@ -46,6 +48,14 @@ type Server struct {
 	// logMu сериализует запись в jsonl-лог: по HTTP запросы приходят
 	// параллельно, в отличие от stdio-цикла.
 	logMu sync.Mutex
+
+	// rerankBusy — защита от наложения тяжёлых Laya-инференсов: вызов,
+	// пришедший во время счёта предыдущего, сразу деградирует в hybrid.
+	// Флаг общий на все проекты: узкое место — scorer, он один.
+	rerankBusy atomic.Bool
+	// searchTimeout — бюджет search_code с реранком (env
+	// CODEPILOT_MCP_SEARCH_TIMEOUT, секунды).
+	searchTimeout time.Duration
 }
 
 // NewServer — обработчик JSON-RPC поверх резолвера индексов; общая основа
@@ -57,7 +67,7 @@ func NewServer(resolve ResolveFunc, projects func() []Project, def string, score
 	if projects == nil {
 		projects = func() []Project { return nil }
 	}
-	return &Server{resolve: resolve, projects: projects, def: def, scorer: scorer}
+	return &Server{resolve: resolve, projects: projects, def: def, scorer: scorer, searchTimeout: searchTimeoutDefault()}
 }
 
 // SetLog включает jsonl-лог вызовов инструментов (пустой путь — без лога).
@@ -386,6 +396,26 @@ func (s *Server) indexFor(project string) (*index.Index, error) {
 	return s.resolve(project)
 }
 
+// searchTimeoutDefault — бюджет search_code с Laya-реранком. ONNX Laya на
+// CPU считает пул из 20 чанков десятки секунд — дольше таймаута MCP-клиента
+// (~60с). По дедлайну отдаём чистый hybrid-порядок с флагом degraded.
+// Переопределяется env CODEPILOT_MCP_SEARCH_TIMEOUT (секунды).
+func searchTimeoutDefault() time.Duration {
+	if v := os.Getenv("CODEPILOT_MCP_SEARCH_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 25 * time.Second
+}
+
+// searchOutcome — результат тяжёлого пути (hybrid+rerank + Noul ONNX).
+type searchOutcome struct {
+	hits []index.SearchHit
+	noul float64
+	err  error
+}
+
 func (s *Server) searchCode(args json.RawMessage) (interface{}, []float64, error) {
 	var a struct {
 		Query   string `json:"query"`
@@ -402,12 +432,43 @@ func (s *Server) searchCode(args json.RawMessage) (interface{}, []float64, error
 	if err != nil {
 		return nil, nil, err
 	}
-	hits, err := ix.Search(a.Query, "hybrid+rerank", a.TopK, s.scorer)
+	// Реранк уже идёт (прошлый вызов ещё досчитывается в фоне после своего
+	// таймаута) — второй Run не ставим: сразу деградируем в hybrid.
+	if !s.rerankBusy.CompareAndSwap(false, true) {
+		return s.hybridFallback(ix, a.Query, a.TopK, "rerank_busy")
+	}
+	ch := make(chan searchOutcome, 1)
+	go func() {
+		defer s.rerankBusy.Store(false)
+		hits, err := ix.Search(a.Query, "hybrid+rerank", a.TopK, s.scorer)
+		if err != nil {
+			ch <- searchOutcome{err: err}
+			return
+		}
+		ch <- searchOutcome{hits: hits, noul: s.scorer.Noul(a.Query, hits)}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return nil, nil, r.err
+		}
+		return searchPayload(a.Query, r.hits, r.noul, "")
+	case <-time.After(s.searchTimeout):
+		// goroutine досчитает в фоне (ORT Run не отменить) — отвечаем hybrid
+		return s.hybridFallback(ix, a.Query, a.TopK, "rerank_timeout")
+	}
+}
+
+// hybridFallback — деградированный search_code: чистый hybrid-порядок,
+// Noul эвристикой (ONNX-инференс здесь недопустим — он и есть причина
+// деградации), reason в поле degraded.
+func (s *Server) hybridFallback(ix *index.Index, query string, topK int, reason string) (interface{}, []float64, error) {
+	hits, err := ix.Search(query, "hybrid", topK, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	noul := s.scorer.Noul(a.Query, hits)
-	return searchPayload(a.Query, hits, noul, "")
+	noul := laya.Heuristic{}.Noul(query, hits)
+	return searchPayload(query, hits, noul, reason)
 }
 func searchPayload(query string, hits []index.SearchHit, noul float64, degraded string) (interface{}, []float64, error) {
 	var scores []float64
