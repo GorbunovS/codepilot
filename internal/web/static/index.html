@@ -101,6 +101,18 @@
   .offline { position: sticky; top: 0; background: #111; color: var(--accent); padding: 8px 16px; font-size: 12px; z-index: 10; }
   #jserr { position: fixed; bottom: 0; left: 0; right: 0; background: #b00; color: #fff; padding: 8px 12px; font: 12px/1.4 monospace; z-index: 9999; white-space: pre-wrap; max-height: 40vh; overflow: auto; }
 
+  /* экран первоначальной настройки */
+  .setup-screen { position: fixed; inset: 0; background: #fff; z-index: 200; display: flex; flex-direction: column; padding: 40px; }
+  .setup-screen h2 { font-size: 22px; margin-bottom: 24px; }
+  .setup-status { display: flex; flex-direction: column; gap: 16px; max-width: 520px; }
+  .setup-item { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+  .setup-item .dot { width: 10px; height: 10px; border-radius: 50%; background: #ddd; flex: 0 0 10px; }
+  .setup-item .dot.ok { background: var(--accent); }
+  .setup-item .dot.run { background: #111; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+  .setup-log { flex: 1; max-width: 720px; margin-top: 24px; border: 1px solid var(--border); padding: 12px; font: 11px/1.5 ui-monospace, Menlo, monospace; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+  .setup-actions { margin-top: 16px; display: flex; gap: 10px; }
+
   /* проводник */
   .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.3); display: flex; align-items: center; justify-content: center; }
   .modal { background: #fff; border: 1px solid #111; width: 480px; max-height: 70vh; display: flex; flex-direction: column; }
@@ -114,6 +126,33 @@
 </head>
 <body>
 <div id="app">
+  <!-- первоначальная настройка: модели + Postgres -->
+  <div class="setup-screen" v-if="!setup.ready">
+    <h2>CodePilot: первоначальная настройка</h2>
+    <div class="setup-status">
+      <div class="setup-item">
+        <span class="dot" :class="setup.models_ready.e5 && setup.models_ready.laya ? 'ok' : (setup.phase.includes('модели') ? 'run' : '')"></span>
+        <span v-if="setup.models_ready.e5 && setup.models_ready.laya">Модели готовы</span>
+        <span v-else-if="setup.phase.includes('модели')">{{ setup.phase }} <span class="spinner sm"></span></span>
+        <span v-else>Модели: подготовка</span>
+      </div>
+      <div class="setup-item">
+        <span class="dot" :class="setup.pg_ready ? 'ok' : (setup.phase.includes('базу') ? 'run' : '')"></span>
+        <span v-if="setup.pg_ready">База данных готова</span>
+        <span v-else-if="setup.phase.includes('базу')">{{ setup.phase }} <span class="spinner sm"></span></span>
+        <span v-else-if="setup.docker_available">База данных: будет запущена в Docker</span>
+        <span v-else>База данных: будет установлена локально</span>
+      </div>
+    </div>
+    <div v-if="setup.error" class="err" style="margin-top:16px">{{ setup.error }}</div>
+    <div class="setup-actions" v-if="!setup.running && setup.error">
+      <button @click="runSetupAuto">Повторить</button>
+    </div>
+    <div class="setup-log" v-if="setup.log.length">
+      <div v-for="(line, i) in setup.log" :key="i">{{ line }}</div>
+    </div>
+  </div>
+
   <aside class="sidebar">
     <h1>CodePilot <span v-if="loading.projects" class="spinner sm" style="float:right;margin-top:2px"></span></h1>
     <div class="proj-list">
@@ -336,15 +375,23 @@ createApp({
       charts: {},
       pollTimer: null,
       idleTimer: null,
+      setupPollTimer: null,
+      setup: { ready: false, running: false, phase: '', error: '', pg_ready: false, docker_available: false, models_ready: {}, log: [] },
     };
   },
 
   async mounted() {
+    await this.loadSetupStatus();
+    if (!this.setup.ready) {
+      await this.runSetupAuto();
+      this.startSetupPoll();
+      return;
+    }
     await this.loadDevices();
     await this.loadProjects();
     this.idleTimer = setInterval(() => this.idleRefresh(), 4000);
   },
-  beforeUnmount() { this.stopPoll(); clearInterval(this.idleTimer); this.destroyCharts(); },
+  beforeUnmount() { this.stopPoll(); this.stopSetupPoll(); clearInterval(this.idleTimer); this.destroyCharts(); },
   watch: {
     lowCpu(v) { localStorage.setItem('codepilot.lowCpu', v ? '1' : '0'); },
     // Канвасы живут под v-else-if="stats.mcp": когда секция пропадает,
@@ -380,6 +427,39 @@ createApp({
         }
       } catch (e) { /* оффлайн-баннер уже показан */ }
     },
+    async loadSetupStatus() {
+      try {
+        const d = await this.api('GET', '/api/setup/status');
+        this.setup = { ...this.setup, ...d, log: d.log || this.setup.log };
+      } catch (e) { /* оффлайн-баннер */ }
+    },
+    async runSetupAuto() {
+      try {
+        const d = await this.api('GET', '/api/setup/status');
+        this.setup = { ...this.setup, ...d };
+        if (d.ready) return;
+        if (!d.models_ready.e5 || !d.models_ready.laya) {
+          await this.api('POST', '/api/setup/models');
+          await this.loadSetupStatus();
+        }
+        if (!this.setup.pg_ready) {
+          await this.api('POST', '/api/setup/postgres');
+        }
+      } catch (e) { /* ошибка покажется в статусе */ }
+    },
+    startSetupPoll() {
+      this.stopSetupPoll();
+      this.setupPollTimer = setInterval(async () => {
+        await this.loadSetupStatus();
+        if (this.setup.ready) {
+          this.stopSetupPoll();
+          await this.loadDevices();
+          await this.loadProjects();
+          this.idleTimer = setInterval(() => this.idleRefresh(), 4000);
+        }
+      }, 2000);
+    },
+    stopSetupPoll() { if (this.setupPollTimer) { clearInterval(this.setupPollTimer); this.setupPollTimer = null; } },
     async loadProjects() {
       this.loading.projects = true;
       try {

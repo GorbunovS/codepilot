@@ -628,6 +628,7 @@ func cmdWeb(args []string) error {
 	fs := flag.NewFlagSet("web", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:8080", "адрес HTTP-сервера панели")
 	logPath := fs.String("log", "mcp-calls.jsonl", "jsonl-лог вызовов инструментов (для статистики нагрузки)")
+	scriptsDir := fs.String("scripts-dir", "", "каталог setup_postgres.py/setup_models.py (авто по бинарю)")
 	layaKind, layaDir := layaFlags(fs)
 	sf := storeFlags(fs)
 	_ = fs.Parse(args)
@@ -689,6 +690,7 @@ func cmdWeb(args []string) error {
 		MaxThreads:  threads,
 		LogPath:     *logPath,
 		BinPath:     bin,
+		ScriptsDir:  *scriptsDir,
 	})
 }
 

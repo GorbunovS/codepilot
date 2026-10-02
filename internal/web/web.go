@@ -49,6 +49,7 @@ type Options struct {
 	MaxThreads  int    // лимит потоков ONNX-инференса (0 — все ядра)
 	LogPath     string // путь к mcp-calls.jsonl
 	BinPath     string // путь к бинарю codepilot (для MCP-сниппета)
+	ScriptsDir  string // каталог setup_postgres.py / setup_models.py
 }
 
 // project — элемент списка проектов. Name — короткий идентификатор для
@@ -108,6 +109,7 @@ type server struct {
 	embMu     sync.Mutex
 	emb       embed.TextEmbedder // общий e5-эмбеддер панели (ленивый синглтон)
 	embSet    bool
+	setup     setupState
 
 	mlxMu     sync.Mutex
 	mlxProc   *exec.Cmd
@@ -257,6 +259,11 @@ func Serve(addr string, opts Options) error {
 	mux.HandleFunc("GET /api/skill", s.handleSkill)
 	mux.HandleFunc("GET /api/skill/status", s.handleSkillStatus)
 	mux.HandleFunc("POST /api/skill/install", s.handleSkillInstall)
+
+	mux.HandleFunc("GET /api/setup/status", s.handleSetupStatus)
+	mux.HandleFunc("POST /api/setup/postgres", s.handleSetupPostgres)
+	mux.HandleFunc("POST /api/setup/models", s.handleSetupModels)
+	mux.HandleFunc("GET /api/setup/log", s.handleSetupLog)
 
 	mux.HandleFunc("POST /mcp", s.handleMCP)
 	mux.HandleFunc("GET /mcp", func(w http.ResponseWriter, _ *http.Request) {

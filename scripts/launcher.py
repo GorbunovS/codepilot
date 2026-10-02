@@ -142,8 +142,7 @@ def main():
         log(f"ERROR: не найден бинарь {cp}")
         sys.exit(1)
 
-    ensure_models()
-    ensure_postgres()
+    scripts = root_dir() / "scripts"
 
     env = os.environ.copy()
     env["CODEPILOT_STORE"] = "pg"
@@ -154,7 +153,7 @@ def main():
         env["CODEPILOT_PG_DSN"] = dsn
 
     print("Запускаю codepilot web...")
-    proc = run([cp, "web", "--addr", ADDR], env=env)
+    proc = run([cp, "web", "--addr", ADDR, "--scripts-dir", str(scripts)], env=env)
 
     print("Жду готовности панели...")
     for i in range(120):

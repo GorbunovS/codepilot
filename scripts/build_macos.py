@@ -99,17 +99,8 @@ if [ "$CURRENT" != "unknown" ]; then
   fi
 fi
 
-# Postgres: docker -> brew (scripts/setup_postgres.py решит сам).
-if ! nc -z 127.0.0.1 5432 2>/dev/null; then
-  echo "настраиваю Postgres..."
-  "$PY3" "$RES/scripts/setup_postgres.py" || {
-    osascript -e 'display alert "CodePilot: Postgres не настроен" message "См. ~/.codepilot/launcher.log. Нужен Docker Desktop или Homebrew."' || true
-    exit 1
-  }
-fi
-
 # Модели: e5 копируем из бандла в пользовательскую папку,
-# Laya докачивается туда же при первом запуске.
+# Laya докачивается туда же после старта приложения (онбординг UI).
 MODELS_DIR="$HOME_DIR/models"
 mkdir -p "$MODELS_DIR"
 export CODEPILOT_MODELS_DIR="$MODELS_DIR"
@@ -119,24 +110,12 @@ if [ -d "$RES/models/e5-small" ] && [ ! -f "$MODELS_DIR/e5-small/model.onnx" ]; 
   cp -R "$RES/models/e5-small" "$MODELS_DIR/e5-small"
 fi
 
-echo "проверяю модели..."
-"$PY3" "$RES/scripts/setup_models.py" || {
-  osascript -e 'display alert "CodePilot: модели не скачались" message "См. ~/.codepilot/launcher.log"' || true
-  exit 1
-}
-
 export CODEPILOT_STORE=pg
 export CODEPILOT_EMBED=onnx
 export CODEPILOT_LAYA=onnx
 export CODEPILOT_ONNXRUNTIME_DLL="$RES/bin/libonnxruntime.dylib"
 
-# DSN из конфига (его пишет setup_postgres.py)
-DSN="$("$PY3" -c 'import json,os;print(json.load(open(os.path.expanduser("~/.codepilot/config.json"))).get("pg_dsn",""))' 2>/dev/null || true)"
-if [ -n "$DSN" ]; then
-  export CODEPILOT_PG_DSN="$DSN"
-fi
-
-"$RES/bin/codepilot" web --addr __ADDR__ --embed-dir "$MODELS_DIR/e5-small" --laya-dir "$MODELS_DIR/laya-multilingual" &
+"$RES/bin/codepilot" web --addr __ADDR__ --scripts-dir "$RES/scripts" --embed-dir "$MODELS_DIR/e5-small" --laya-dir "$MODELS_DIR/laya-multilingual" &
 WEB_PID=$!
 trap 'kill $WEB_PID 2>/dev/null || true' EXIT
 
