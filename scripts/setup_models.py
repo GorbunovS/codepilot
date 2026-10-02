@@ -8,11 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
-import tempfile
 import urllib.request
-import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,37 +44,33 @@ def ensure_laya():
         print(f"есть: {laya_dir / 'laya.onnx'}")
         return
 
-    src_dir = MODELS_DIR / "laya-multilingual-src"
-    base = "https://huggingface.co/convaiinnovations/laya-multilingual/resolve/main"
+    # Готовый ONNX (без локального экспорта — не нужен torch).
+    onnx_base = "https://huggingface.co/yehor-oleksiuk/laya-multilingual-onnx/resolve/main"
     files = {
-        "rl_agent_config.json": f"{base}/rl_agent_config.json",
-        "encoder/config.json": f"{base}/encoder/config.json",
-        "tokenizer/tokenizer.json": f"{base}/tokenizer/tokenizer.json",
-        "tokenizer/tokenizer_config.json": f"{base}/tokenizer/tokenizer_config.json",
-        "model.safetensors": f"{base}/model.safetensors",
+        "laya.onnx": f"{onnx_base}/model_fp32.onnx",
+        "tokenizer.json": f"{onnx_base}/tokenizer.json",
+        "tokenizer_config.json": f"{onnx_base}/tokenizer_config.json",
     }
     for rel, url in files.items():
-        dest = src_dir / rel
+        dest = laya_dir / rel
         if dest.exists():
             print(f"есть: {dest}")
             continue
         download(url, dest)
 
-    export_script = ROOT / "tools" / "laya-export" / "export_onnx.py"
-    req = ROOT / "tools" / "laya-export" / "requirements.txt"
-    if export_script.exists() and req.exists():
-        print("Экспортирую Laya в ONNX...")
-        try:
-            import laya  # noqa: F401
-        except ImportError:
-            print("Устанавливаю зависимости laya-export...")
-            subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req)], check=True)
-        subprocess.run(
-            [sys.executable, str(export_script), str(src_dir), str(laya_dir)],
-            check=True,
+    # Конфиг калибровки из исходного чекпоинта.
+    src_cfg = MODELS_DIR / "laya-multilingual-src" / "rl_agent_config.json"
+    if not src_cfg.exists():
+        download(
+            "https://huggingface.co/convaiinnovations/laya-multilingual/resolve/main/rl_agent_config.json",
+            src_cfg,
         )
-    else:
-        print("WARNING: не найден export_onnx.py; положите готовый Laya ONNX в models/laya-multilingual/")
+    cfg = json.load(open(src_cfg))
+    json.dump(
+        {k: cfg[k] for k in ("max_len", "head_max_len", "temperature", "temperature_by_options")},
+        open(laya_dir / "laya_config.json", "w"),
+        indent=1,
+    )
 
 
 if __name__ == "__main__":

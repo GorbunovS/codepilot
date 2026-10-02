@@ -4,13 +4,18 @@
 Что внутри:
 - CodePilot.app: Go-бинарь, bin/libonnxruntime.dylib, models/e5-small,
   скрипты первичной настройки, иконка, лаунчер.
-- postinstall: ставит Postgres (Docker pgvector/pgvector:pg17 → brew
-  postgresql@17), скачивает модели (e5 уже вшит, Laya — с HF + экспорт).
+- postinstall: снимает карантин и чинит владельца.
+
+При первом запуске лаунчер:
+- ставит Postgres (Docker pgvector/pgvector:pg17 → brew postgresql@17),
+- копирует вшитый e5-small в ~/.codepilot/models/,
+- скачивает готовый Laya ONNX с HuggingFace в ~/.codepilot/models/,
+- запускает web-панель и открывает браузер.
 
 Сборка:
     python3 scripts/build_macos.py
 
-Результат: CodePilot-macOS.pkg в корне репо.
+Результат: installers/mac/CodePilot-macOS.pkg (gitignored).
 """
 from __future__ import annotations
 
@@ -28,7 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 APP_NAME = "CodePilot"
 BUNDLE_ID = "com.codepilot.app"
-DEFAULT_VERSION = "1.0.0"
+DEFAULT_VERSION = ""  # авто: дата сборки YYYY.MM.DD-HHMM
 ADDR = "127.0.0.1:8080"
 REPO = "GorbunovS/codepilot"
 
@@ -40,7 +45,7 @@ def run(cmd: list[str | Path], **kwargs):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--version", default=DEFAULT_VERSION, help="версия сборки (тег релиза)")
+    p.add_argument("--version", default=DEFAULT_VERSION, help="версия сборки (пусто = авто YYYY.MM.DD-HHMM)")
     return p.parse_args()
 
 
@@ -188,12 +193,6 @@ def assemble_app(work: Path) -> Path:
     sdir.mkdir()
     for name in ("setup_postgres.py", "setup_models.py"):
         shutil.copy2(ROOT / "scripts" / name, sdir / name)
-    # setup_models.py ждёт tools/laya-export рядом с models/
-    lexp = res / "tools" / "laya-export"
-    lexp.mkdir(parents=True)
-    for f in (ROOT / "tools" / "laya-export").glob("*.py"):
-        shutil.copy2(f, lexp / f.name)
-    shutil.copy2(ROOT / "tools" / "laya-export" / "requirements.txt", lexp / "requirements.txt")
 
     # лаунчер
     launcher = macos / APP_NAME
@@ -272,6 +271,10 @@ def main():
     args = parse_args()
     global VERSION
     VERSION = args.version
+    if not VERSION:
+        from datetime import datetime
+        VERSION = datetime.now().strftime("%Y.%m.%d-%H%M")
+        print(f"автоверсия: {VERSION}")
     if sys.platform != "darwin":
         print("сборка macOS-установщика возможна только на macOS")
         sys.exit(1)

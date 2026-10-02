@@ -140,6 +140,14 @@ func Load(modelDir string, threads int, providers ...string) (*Model, error) {
 		} else {
 			fmt.Fprintf(os.Stderr, "laya: для --device нужен однофайловый %s (склейка: tools/laya-export/merge_external_data.py); пробую %s\n", single, onnxPath)
 		}
+	} else if os.Getenv("CODEPILOT_LAYA_INT8") == "1" {
+		// Opt-in int8-квантизация (tools/laya-export/quantize_int8.py): на CPU
+		// ~1.7x быстрее fp32 и модель заметно меньше, но по eval 02.10 качество
+		// проседает (blend R@1 0.83→0.58, rerank R@1 0.42→0.33) — не дефолт.
+		if q8 := filepath.Join(modelDir, "laya-int8.onnx"); fileExists(q8) {
+			onnxPath = q8
+			fmt.Fprintf(os.Stderr, "laya: использую int8-квантизацию (%s)\n", q8)
+		}
 	}
 	if _, err := os.Stat(onnxPath); err != nil {
 		return nil, fmt.Errorf("laya: laya.onnx не найден в %s: %w", modelDir, err)
@@ -177,6 +185,12 @@ func Load(modelDir string, threads int, providers ...string) (*Model, error) {
 	}
 	m.session = sess
 	return m, nil
+}
+
+// fileExists — файл существует.
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // Close освобождает сессию, окружение и runtime.

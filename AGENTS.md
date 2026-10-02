@@ -35,7 +35,7 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
 | `internal/index/` | индекс: SQLite `index.db` (store.go) или Postgres+pgvector (pgstore.go), BM25 k1=1.5 b=0.75, TF-IDF, гибрид RRF k=60 (search.go), лексикон синонимов (lexicon.go) |
 | `internal/embed/` | bi-encoder эмбеддинги e5-small (ONNX): префиксы `query: `/`passage: `, mean pooling, L2-норма; `remote.go` — HTTP-клиент MLX-сайдкара (`RemoteEmbedder`, общий интерфейс `TextEmbedder`) |
 | `internal/ortlib/` | поиск нативной onnxruntime (.dll/.dylib/.so), env `CODEPILOT_ONNXRUNTIME_DLL` |
-| `internal/laya/` | слой решений: интерфейс `Scorer` (Score 0..5, Noul 0..1), эвристика (laya.go), ONNX-модель (onnx.go) |
+| `internal/laya/` | слой решений: интерфейс `Scorer` (Score 0..5, Noul 0..1), эвристика (laya.go), ONNX-модель (onnx.go); opt-in int8 `laya-int8.onnx` на CPU — `CODEPILOT_LAYA_INT8=1` (быстрее, но качество проседает) |
 | `internal/mcp/` | MCP-сервер: newline-delimited JSON-RPC 2.0 (stdio) + `HandleRaw` для HTTP; 6 инструментов, лог `mcp-calls.jsonl`; мультипроект: аргумент `project` во всех инструментах + `list_projects`, индексы подключаются лениво через `ResolveFunc` и кэшируются; `reindex` — триггер фоновой переиндексации (`ReindexFunc`, подключается через `SetReindex`) |
 | `internal/config/` | общий конфиг демона `~/.codepilot/config.json` + реестр проектов `projects.json` (`name` — идентификатор для агента); `Find` — маршрутизация project-аргумента (точное имя → регистр → путь → дефолт → первый) |
 | `internal/web/` | веб-панель (`web`): SPA на Vue 3 + Chart.js (CDN, `static/index.html`, go:embed) + JSON API на stdlib net/http; список проектов в `~/.codepilot/projects.json`, состояние прогонов — в `~/.codepilot/jobs.json`; при старте мержит явные флаги поверх `config.json` и сохраняет его обратно (serve без флагов читает его); индексация в горутине с логом через `index.Logf` (хук глобальный — восстанавливается после прогона, одновременно один проект); кэш открытых индексов (`idxCache`, инвалидация по mtime/size и после прогона) для дешёвого polling `/api/stats`; `/api/devices` — только реально доступные устройства (`embed.AvailableProviders`, детекция один раз); `/api/search` — ручной поиск из панели (scorer — ленивый синглтон Laya); `/api/skill*` — выдача/установка скилла агента (`static/skill/SKILL.md`, go:embed) в `.kimi-code/skills/` (или существующий `.agents/skills/`); `/api/mcp/install` — мерж `mcpServers.codepilot` в `<проект>/.kimi-code/mcp.json` (сниппет — http: `{"type":"http","url":"http://<addr>/mcp"}`); `POST /mcp` — MCP-демон по HTTP на кэше индексов панели (`mcp.NewServer` + `HandleRaw`, scorer — ленивый синглтон); добавление проекта без `index.db` автоматически запускает индексацию на устройстве, выбранном в UI (`device` в POST /api/projects; пусто — текущее из настроек); `low_cpu` в `/api/index` — щадящий режим (½ ядер) |
@@ -78,6 +78,10 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
 - **ONNX опционален.** Модель (`models/laya-multilingual/`, ~1.3 ГБ) и рантайм
   (`bin/`) не в репо. `--laya onnx` или `CODEPILOT_LAYA=onnx`; при любой ошибке
   загрузки — автоматический fallback на эвристику с warning в stderr.
+  Opt-in int8: `CODEPILOT_LAYA_INT8=1` подхватывает `laya-int8.onnx`
+  (динамическая квантизация MatMul/Gemm, `tools/laya-export/quantize_int8.py`):
+  ~1.7x быстрее инференс на CPU, 1231→883 МБ, **но качество проседает**
+  (eval 02.10: blend R@1 0.83→0.58, rerank R@1 0.42→0.33) — не дефолт.
   Windows: `bin/onnxruntime.dll`; unix: dlopen (dlopen_unix.go), нужен
   `.dylib`/`.so`. Режимы финальной выдачи: `hybrid+rerank` (чистый порядок Laya)
   и `hybrid+blend` (`blendAlpha = 0.5` в search.go; рекомендуемый дефолт — blend,
