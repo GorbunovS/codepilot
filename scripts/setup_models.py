@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-MODELS_DIR = ROOT / "models"
+MODELS_DIR = Path(os.environ.get("CODEPILOT_MODELS_DIR", ROOT / "models"))
 
 
 def download(url: str, dest: Path):

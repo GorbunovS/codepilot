@@ -113,9 +113,18 @@ if ! nc -z 127.0.0.1 5432 2>/dev/null; then
   }
 fi
 
-# Модели (e5 вшит, Laya докачивается один раз).
+# Модели: e5 копируем из бандла в пользовательскую папку,
+# Laya докачивается туда же при первом запуске.
+MODELS_DIR="$HOME_DIR/models"
+mkdir -p "$MODELS_DIR"
+export CODEPILOT_MODELS_DIR="$MODELS_DIR"
+if [ -d "$RES/models/e5-small" ] && [ ! -f "$MODELS_DIR/e5-small/model.onnx" ]; then
+  echo "копирую e5-small в $MODELS_DIR..."
+  rm -rf "$MODELS_DIR/e5-small"
+  cp -R "$RES/models/e5-small" "$MODELS_DIR/e5-small"
+fi
+
 echo "проверяю модели..."
-cd "$RES"
 "$PY3" "$RES/scripts/setup_models.py" || {
   osascript -e 'display alert "CodePilot: модели не скачались" message "См. ~/.codepilot/launcher.log"' || true
   exit 1
@@ -132,7 +141,7 @@ if [ -n "$DSN" ]; then
   export CODEPILOT_PG_DSN="$DSN"
 fi
 
-"$RES/bin/codepilot" web --addr __ADDR__ &
+"$RES/bin/codepilot" web --addr __ADDR__ --embed-dir "$MODELS_DIR/e5-small" --laya-dir "$MODELS_DIR/laya-multilingual" &
 WEB_PID=$!
 trap 'kill $WEB_PID 2>/dev/null || true' EXIT
 
