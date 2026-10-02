@@ -64,7 +64,7 @@ func TestSearchCodeRerankTimeout(t *testing.T) {
 	if m["degraded"] != "rerank_timeout" {
 		t.Fatalf("degraded = %v, ожидался rerank_timeout", m["degraded"])
 	}
-	if len(m["results"].([]index.SearchHit)) == 0 {
+	if len(m["results"].([]hit)) == 0 {
 		t.Fatal("пустая выдача при деградации")
 	}
 }

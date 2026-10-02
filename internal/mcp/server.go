@@ -412,8 +412,36 @@ func searchTimeoutDefault() time.Duration {
 // searchOutcome — результат тяжёлого пути (hybrid+rerank + Noul ONNX).
 type searchOutcome struct {
 	hits []index.SearchHit
-	noul float64
 	err  error
+}
+
+// hit — компактная проекция хита для ответа агенту: без служебных полей
+// (id, hash) — они дублируют file/lines и просто жгут токены.
+type hit struct {
+	File      string  `json:"file"`
+	StartLine int     `json:"start_line"`
+	EndLine   int     `json:"end_line"`
+	Symbol    string  `json:"symbol"`
+	Kind      string  `json:"kind"`
+	Language  string  `json:"language"`
+	Signature string  `json:"signature,omitempty"`
+	Doc       string  `json:"doc,omitempty"`
+	Content   string  `json:"content"`
+	Score     float64 `json:"score"`
+}
+
+func toHits(hits []index.SearchHit) []hit {
+	out := make([]hit, 0, len(hits))
+	for _, h := range hits {
+		c := h.Chunk
+		out = append(out, hit{
+			File: c.FilePath, StartLine: c.StartLine, EndLine: c.EndLine,
+			Symbol: c.SymbolName, Kind: c.Kind, Language: c.Language,
+			Signature: c.Signature, Doc: c.Doc, Content: c.Content,
+			Score: h.Score,
+		})
+	}
+	return out
 }
 
 func (s *Server) searchCode(args json.RawMessage) (interface{}, []float64, error) {
@@ -445,14 +473,20 @@ func (s *Server) searchCode(args json.RawMessage) (interface{}, []float64, error
 			ch <- searchOutcome{err: err}
 			return
 		}
-		ch <- searchOutcome{hits: hits, noul: s.scorer.Noul(a.Query, hits)}
+		ch <- searchOutcome{hits: hits}
 	}()
 	select {
 	case r := <-ch:
 		if r.err != nil {
 			return nil, nil, r.err
 		}
-		return searchPayload(a.Query, r.hits, r.noul, "")
+		// Адаптивная отсечка: хвост ниже max(floor, топ1-margin) агенту не
+		// показываем (это шум, съедающий токены). Noul считаем по тому, что
+		// реально увидит агент: мало релевантного контекста → need_more →
+		// эскалация (read_span или повторный поиск с большим top_k).
+		hits := index.FilterRelevant(r.hits)
+		noul := s.scorer.Noul(a.Query, hits)
+		return searchPayload(a.Query, hits, len(r.hits) == a.TopK || len(hits) < len(r.hits), noul, "")
 	case <-time.After(s.searchTimeout):
 		// goroutine досчитает в фоне (ORT Run не отменить) — отвечаем hybrid
 		return s.hybridFallback(ix, a.Query, a.TopK, "rerank_timeout")
@@ -461,25 +495,33 @@ func (s *Server) searchCode(args json.RawMessage) (interface{}, []float64, error
 
 // hybridFallback — деградированный search_code: чистый hybrid-порядок,
 // Noul эвристикой (ONNX-инференс здесь недопустим — он и есть причина
-// деградации), reason в поле degraded.
+// деградации), reason в поле degraded. Фильтр RelevantCutoff неприменим:
+// у RRF-скоров другая шкала.
 func (s *Server) hybridFallback(ix *index.Index, query string, topK int, reason string) (interface{}, []float64, error) {
 	hits, err := ix.Search(query, "hybrid", topK, nil)
 	if err != nil {
 		return nil, nil, err
 	}
 	noul := laya.Heuristic{}.Noul(query, hits)
-	return searchPayload(query, hits, noul, reason)
+	return searchPayload(query, hits, len(hits) == topK, noul, reason)
 }
-func searchPayload(query string, hits []index.SearchHit, noul float64, degraded string) (interface{}, []float64, error) {
+
+// searchPayload — ответ search_code. moreAvailable = true, если выдача
+// обрезана (top_k или фильтром релевантности): агент может повторить запрос
+// с большим top_k.
+func searchPayload(query string, hits []index.SearchHit, moreAvailable bool, noul float64, degraded string) (interface{}, []float64, error) {
 	var scores []float64
 	for _, h := range hits {
 		scores = append(scores, h.Score)
 	}
 	out := map[string]interface{}{
 		"query":     query,
-		"results":   hits,
+		"results":   toHits(hits),
 		"noul":      noul,
 		"need_more": noul < 0.5,
+	}
+	if moreAvailable {
+		out["more_available"] = true
 	}
 	if degraded != "" {
 		out["degraded"] = degraded

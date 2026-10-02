@@ -135,36 +135,86 @@ func baselineTokens(query, root string, files []string) int {
 	return (grepOut.Len() + full.Len()) / charsPerToken
 }
 
-type ragPayload struct {
-	Query    string            `json:"query"`
-	NeedMore bool              `json:"need_more"`
-	Noul     float64           `json:"noul"`
-	Results  []index.SearchHit `json:"results"`
+// ragHit — зеркало slim-проекции хита из MCP-ответа (internal/mcp/server.go):
+// без id/hash, omitempty на signature/doc. Токены считаем по честному
+// payload, который реально получит агент.
+type ragHit struct {
+	File      string  `json:"file"`
+	StartLine int     `json:"start_line"`
+	EndLine   int     `json:"end_line"`
+	Symbol    string  `json:"symbol"`
+	Kind      string  `json:"kind"`
+	Language  string  `json:"language"`
+	Signature string  `json:"signature,omitempty"`
+	Doc       string  `json:"doc,omitempty"`
+	Content   string  `json:"content"`
+	Score     float64 `json:"score"`
 }
 
-// ragTokens симулирует RAG-агента: search_code топ-5 (hybrid+rerank),
-// при need_more — один read_span расширенного чанка (±15 строк).
-// Токены = payload инструментов/4.
-func ragTokens(ix *index.Index, query string, scorer laya.Scorer, topK int) (int, bool, error) {
-	hits, err := ix.Search(query, "hybrid+blend", topK, scorer)
+type ragPayload struct {
+	Query         string   `json:"query"`
+	NeedMore      bool     `json:"need_more"`
+	Noul          float64  `json:"noul"`
+	MoreAvailable bool     `json:"more_available,omitempty"`
+	Results       []ragHit `json:"results"`
+}
+
+// searchOnce — один вызов search_code: поиск, адаптивная отсечка хвоста,
+// Noul по тому, что реально увидит агент. Возвращает токены payload,
+// отфильтрованные хиты и need_more.
+func searchOnce(ix *index.Index, query string, scorer laya.Scorer, topK int) (int, []index.SearchHit, bool, error) {
+	raw, err := ix.Search(query, "hybrid+blend", topK, scorer)
 	if err != nil {
-		return 0, false, err
+		return 0, nil, false, err
 	}
+	hits := index.FilterRelevant(raw)
 	noul := scorer.Noul(query, hits)
 	needMore := noul < 0.5
-	payload, err := json.Marshal(ragPayload{Query: query, NeedMore: needMore, Noul: noul, Results: hits})
+	payload := ragPayload{Query: query, NeedMore: needMore, Noul: noul,
+		MoreAvailable: len(raw) == topK || len(hits) < len(raw)}
+	for _, h := range hits {
+		c := h.Chunk
+		payload.Results = append(payload.Results, ragHit{
+			File: c.FilePath, StartLine: c.StartLine, EndLine: c.EndLine,
+			Symbol: c.SymbolName, Kind: c.Kind, Language: c.Language,
+			Signature: c.Signature, Doc: c.Doc, Content: c.Content, Score: h.Score,
+		})
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return 0, nil, false, err
+	}
+	return len(data) / charsPerToken, hits, needMore, nil
+}
+
+// ragTokens симулирует RAG-агента по актуальному контракту MCP: search_code
+// с адаптивной отсечкой; при need_more — эскалация: повторный поиск с
+// удвоенным top_k и один read_span расширенного топ-чанка (±15 строк).
+// Токены = payload инструментов/4.
+func ragTokens(ix *index.Index, query string, scorer laya.Scorer, topK int) (int, bool, error) {
+	tokens, hits, needMore, err := searchOnce(ix, query, scorer, topK)
 	if err != nil {
 		return 0, false, err
 	}
-	tokens := len(payload) / charsPerToken
-	if needMore && len(hits) > 0 {
+	if !needMore {
+		return tokens, false, nil
+	}
+	esc, hits2, _, err := searchOnce(ix, query, scorer, topK*2)
+	if err != nil {
+		return 0, false, err
+	}
+	tokens += esc
+	if len(hits2) > 0 {
+		hits = hits2
+	}
+	if len(hits) > 0 {
 		c := hits[0].Chunk
 		span, err := index.ReadSpan(ix.ProjectRoot, c.FilePath, c.StartLine-15, c.EndLine+15)
 		if err == nil {
 			tokens += len(span) / charsPerToken
 		}
 	}
-	return tokens, needMore, nil
+	return tokens, true, nil
 }
 
 // MeanMedianRatio — среднее и медиана ratio по задачам.

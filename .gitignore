@@ -1,31 +1,28 @@
-# Собранный бинарь
-/codepilot.exe
-/codepilot
 
-# Нативный рантайм и модели (скачиваются/генерируются отдельно, см. README)
-bin/
-models/
-
-# Генерируемые индексы и логи
-index.db*
-index.json
-mcp-calls.jsonl
-*.log
-
-# Локальная конфигурация агента (установленный скилл codepilot)
-.kimi-code/
-
-# Python-окружение офлайн-инструментов
-tools/laya-export/.venv/
-
-# Отчёты eval перегенерируются командой eval
 # (eval/report.md оставляем в репозитории как пример)
-__pycache__/
-
+# Python-окружение офлайн-инструментов
 # macOS
-.DS_Store
-
+# Генерируемые индексы и логи
+# Локальная конфигурация агента (установленный скилл codepilot)
+# Нативный рантайм и модели (скачиваются/генерируются отдельно, см. README)
+# Отчёты eval перегенерируются командой eval
 # Сборки десктоп-приложения (Pake)
+# Собранный бинарь
+*.log
+.DS_Store
+.kimi-code/
+/CodePilot-Setup.exe
+/CodePilot-macOS.pkg
+/codepilot
+/codepilot.exe
+/installers/
 CodePilot.app/
 CodePilot.dmg
+__pycache__/
+bin/
+index.db*
+index.json
 logo.icns
+mcp-calls.jsonl
+models/
+tools/laya-export/.venv/

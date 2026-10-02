@@ -40,7 +40,7 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
 | `internal/config/` | общий конфиг демона `~/.codepilot/config.json` + реестр проектов `projects.json` (`name` — идентификатор для агента); `Find` — маршрутизация project-аргумента (точное имя → регистр → путь → дефолт → первый) |
 | `internal/web/` | веб-панель (`web`): SPA на Vue 3 + Chart.js (CDN, `static/index.html`, go:embed) + JSON API на stdlib net/http; список проектов в `~/.codepilot/projects.json`, состояние прогонов — в `~/.codepilot/jobs.json`; при старте мержит явные флаги поверх `config.json` и сохраняет его обратно (serve без флагов читает его); индексация в горутине с логом через `index.Logf` (хук глобальный — восстанавливается после прогона, одновременно один проект); кэш открытых индексов (`idxCache`, инвалидация по mtime/size и после прогона) для дешёвого polling `/api/stats`; `/api/devices` — только реально доступные устройства (`embed.AvailableProviders`, детекция один раз); `/api/search` — ручной поиск из панели (scorer — ленивый синглтон Laya); `/api/skill*` — выдача/установка скилла агента (`static/skill/SKILL.md`, go:embed) в `.kimi-code/skills/` (или существующий `.agents/skills/`); `/api/mcp/install` — мерж `mcpServers.codepilot` в `<проект>/.kimi-code/mcp.json` (сниппет — http: `{"type":"http","url":"http://<addr>/mcp"}`); `POST /mcp` — MCP-демон по HTTP на кэше индексов панели (`mcp.NewServer` + `HandleRaw`, scorer — ленивый синглтон); добавление проекта без `index.db` автоматически запускает индексацию; `low_cpu` в `/api/index` — щадящий режим (½ ядер) |
 | `internal/eval/` | метрики A=fts B=vec C=hybrid D=hybrid+rerank E=hybrid+blend |
-| `internal/bench/` | симуляция двух агентов; токены = байты/4; RAG-агент всегда `hybrid+blend` |
+| `internal/bench/` | симуляция двух агентов; токены = байты/4; RAG-агент: hybrid+blend + FilterRelevant, при need_more — эскалация (top_k×2 + read_span) |
 | `sample_project/` | демо-репозиторий для eval/bench |
 | `scripts/post-commit` | git hook: инкрементальное обновление индекса после коммита |
 | `scripts/download_models.sh` | скачивание e5-small ONNX в `models/` |
@@ -137,7 +137,15 @@ go vet ./... && go test ./internal/...  # проверки (тесты: chunk, i
   Laya обязаны видеть один и тот же запрос.
 - `SearchHit` сортируется по `Score` по убыванию; пул реранка = топ-20 hybrid.
 - Noul-гейт: `noul < 0.5` → `need_more: true` (агенту предлагается дочитать контекст).
-  Порог зашит в MCP-сервере и bench.
+  Порог зашит в MCP-сервере и bench. Noul считается по хитам ПОСЛЕ
+  адаптивной отсечки — по тому, что реально увидит агент.
+- **MCP: адаптивная отсечка выдачи** (`index.FilterRelevant`, константы
+  `RelevantFloor`/`RelevantMargin` в search.go). Zero-shot скоры Laya сжаты
+  (топ-1 ~0.55–0.65, за ним плато шума 0.50–0.55), поэтому отсекаем хвост по
+  связке «пол 0.5 + отрыв от топ-1 0.05», минимум 1 хит. Ответ — slim-проекция
+  (без id/hash), поле `more_available: true` = выдача обрезана, агент может
+  повторить с большим top_k. К деградированному hybrid-порядку (RRF-шкала)
+  фильтр не применяется.
 - **MCP: бюджет search_code** (`internal/mcp/server.go`): Laya-реранк на CPU идёт
   десятки секунд — дольше таймаута MCP-клиента (~60с). По дедлайну
   (`CODEPILOT_MCP_SEARCH_TIMEOUT`, дефолт 25с) и при занятом реранке отдаём

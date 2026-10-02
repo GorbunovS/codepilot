@@ -232,6 +232,42 @@ func (ix *Index) topHits(scores []float64, k int) []SearchHit {
 	return hits
 }
 
+// Параметры адаптивной отсечки выдачи в режимах с нормированным скором
+// Laya (score = Laya/5, 0..1). Zero-shot скоры сжаты: типичный топ-1 —
+// 0.55–0.65, за ним плотное плато шума 0.50–0.55, поэтому абсолютный порог
+// почти ничего не отрезает. Работает связка:
+//
+//	RelevantFloor  — абсолютный пол (0.5 ≈ «косвенно связан» и выше);
+//	RelevantMargin — относительный отрыв от топ-1: хиты ниже топ-1 минус
+//	  маржа — это уже догадки, а не ответы.
+//
+// К чистому hybrid (RRF-скоры ~0.01) неприменимо — там своя шкала.
+const (
+	RelevantFloor  = 0.5
+	RelevantMargin = 0.05
+)
+
+// FilterRelevant отбрасывает хвост выдачи: хиты со скором ниже
+// max(RelevantFloor, топ1-RelevantMargin). Всегда оставляет минимум один
+// (лучший): пустая выдача хуже слабого кандидата. Применять только к
+// режимам rerank/blend, где Score — нормированный скор Laya.
+func FilterRelevant(hits []SearchHit) []SearchHit {
+	if len(hits) <= 1 {
+		return hits
+	}
+	cut := hits[0].Score - RelevantMargin
+	if cut < RelevantFloor {
+		cut = RelevantFloor
+	}
+	n := 1
+	// Строгое сравнение: плато шума zero-shot Laya сидит ровно на полу
+	// (0.50–0.51), нестрогое >= пропускало бы его целиком.
+	for n < len(hits) && hits[n].Score > cut {
+		n++
+	}
+	return hits[:n]
+}
+
 func firstK(hits []SearchHit, k int) []SearchHit {
 	if len(hits) > k {
 		hits = hits[:k]
