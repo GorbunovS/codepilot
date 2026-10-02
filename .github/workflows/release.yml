@@ -1,0 +1,106 @@
+name: release
+
+on:
+  push:
+    branches: [prod]
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Build platform'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - mac
+          - win
+          - both
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    if: github.event_name == 'push' || inputs.platform == 'mac' || inputs.platform == 'both'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '9'
+
+      - name: Rust toolchain (для Pake/Tauri)
+        run: rustup default stable || true
+
+      - name: Download ONNX Runtime
+        run: ./scripts/download_ort_macos.sh
+
+      - name: Download e5-small model
+        run: ./scripts/download_models.sh
+
+      - name: Build .pkg
+        run: |
+          VERSION="v$(date +%Y.%m.%d-%H%M)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          python3 scripts/build_macos.py --version "$VERSION"
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ env.VERSION }}" \
+            installers/mac/CodePilot-macOS.pkg \
+            --title "CodePilot macOS ${{ env.VERSION }}" \
+            --notes "Автосборка с ветки prod" \
+            --target prod
+
+  build-win:
+    runs-on: windows-latest
+    if: github.event_name == 'push' || inputs.platform == 'win' || inputs.platform == 'both'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '9'
+
+      - name: Rust toolchain (для Pake/Tauri)
+        run: rustup default stable
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+
+      - name: Build Windows installer
+        run: |
+          $VERSION = "v$(Get-Date -Format 'yyyy.MM.dd-HHmm')"
+          echo "VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_ENV -Append
+          python scripts/build_windows.py --version $VERSION
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ env.VERSION }}" `
+            installers/windows/CodePilot-Setup.exe `
+            --title "CodePilot Windows ${{ env.VERSION }}" `
+            --notes "Автосборка с ветки prod" `
+            --target prod

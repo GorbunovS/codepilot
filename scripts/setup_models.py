@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Скачивание моделей e5-small и Laya для codepilot.
+"""Download e5-small and Laya models for codepilot.
 
-Запуск:
+Run:
     python scripts/setup_models.py
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ MODELS_DIR = Path(os.environ.get("CODEPILOT_MODELS_DIR", ROOT / "models"))
 
 
 def download(url: str, dest: Path):
-    print(f"скачиваю {url} -> {dest}")
+    print(f"downloading {url} -> {dest}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     urllib.request.urlretrieve(url, dest)
 
@@ -33,7 +33,7 @@ def ensure_e5():
     for name, url in files.items():
         dest = e5_dir / name
         if dest.exists():
-            print(f"есть: {dest}")
+            print(f"already have: {dest}")
             continue
         download(url, dest)
 
@@ -41,13 +41,13 @@ def ensure_e5():
 def ensure_laya():
     laya_dir = MODELS_DIR / "laya-multilingual"
     laya_path = laya_dir / "laya.onnx"
-    # Монолитная модель с HF — ~1.2 ГБ. Если laya.onnx маленький (< 10 МБ),
-    # это модель с внешними весами (без laya.onnx.data) — перекачиваем.
+    # HF model is monolithic ~1.2 GB. If laya.onnx is small (< 10 MB), it is missing
+    # external weights (laya.onnx.data) and will be re-downloaded.
     if laya_path.exists() and laya_path.stat().st_size > 10 * 1024 * 1024:
-        print(f"есть: {laya_path} ({laya_path.stat().st_size / 2**20:.0f} МБ)")
+        print(f"already have: {laya_path} ({laya_path.stat().st_size / 2**20:.0f} MB)")
         return
 
-    # Готовый ONNX (без локального экспорта — не нужен torch).
+    # Ready-made ONNX (no local export, torch not needed).
     onnx_base = "https://huggingface.co/yehor-oleksiuk/laya-multilingual-onnx/resolve/main"
     files = {
         "laya.onnx": f"{onnx_base}/model_fp32.onnx",
@@ -57,11 +57,11 @@ def ensure_laya():
     for rel, url in files.items():
         dest = laya_dir / rel
         if dest.exists():
-            print(f"есть: {dest}")
+            print(f"already have: {dest}")
             continue
         download(url, dest)
 
-    # Конфиг калибровки из исходного чекпоинта.
+    # Calibration config from source checkpoint.
     src_cfg = MODELS_DIR / "laya-multilingual-src" / "rl_agent_config.json"
     if not src_cfg.exists():
         download(
@@ -79,4 +79,4 @@ def ensure_laya():
 if __name__ == "__main__":
     ensure_e5()
     ensure_laya()
-    print("готово")
+    print("done")
