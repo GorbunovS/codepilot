@@ -280,7 +280,7 @@ def main():
     (ROOT / "codepilot_windows.exe").unlink(missing_ok=True)
     size_mb = setup.stat().st_size / 2**20
     print(f"\nDone: {setup} ({size_mb:.0f} MB)")
-    print("For colleague: run CodePilot-Setup.exe → install → launch from Start menu.")
+    print("For colleague: run CodePilot-Setup.exe -> install -> launch from Start menu.")
     print("Laya model will be downloaded and Postgres will be configured on first run.")
 
 
