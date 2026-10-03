@@ -38,9 +38,13 @@ REPO = "GorbunovS/codepilot"
 ORT_VERSION = "1.23.1"
 
 
-def run(cmd: list[str | Path], **kwargs):
-    print("  $", " ".join(str(c) for c in cmd))
-    subprocess.run([str(c) for c in cmd], check=True, **kwargs)
+def run(cmd: list[str | Path] | str, shell: bool = False, **kwargs):
+    if isinstance(cmd, str):
+        print("  $", cmd)
+        subprocess.run(cmd, check=True, shell=shell, **kwargs)
+    else:
+        print("  $", " ".join(str(c) for c in cmd))
+        subprocess.run([str(c) for c in cmd], check=True, shell=shell, **kwargs)
 
 
 def parse_args():
@@ -107,11 +111,10 @@ def find_pake_exe(pake_dir: Path) -> Path | None:
     return None
 
 
-def pnpm_cmd(*args: str | Path) -> list[str]:
-    """Returns pnpm command, falling back to npx pnpm if pnpm is not in PATH."""
-    if shutil.which("pnpm"):
-        return ["pnpm", *(str(a) for a in args)]
-    return ["npx", "pnpm", *(str(a) for a in args)]
+def pnpm_cmd_str(*args: str | Path) -> str:
+    """Returns pnpm shell command, falling back to npx pnpm if pnpm is not in PATH."""
+    base = "pnpm" if shutil.which("pnpm") else "npx pnpm"
+    return base + " " + " ".join(str(a) for a in args)
 
 
 def build_pake_app(work: Path) -> Path:
@@ -130,13 +133,13 @@ def build_pake_app(work: Path) -> Path:
                 time.sleep(0.5)
         pake_dir = work / "pake"
         pake_dir.mkdir()
-        run(pnpm_cmd("init"), cwd=pake_dir)
-        run(pnpm_cmd("add", "pake-cli"), cwd=pake_dir)
-        cmd = pnpm_cmd("exec", "pake", f"http://{ADDR}", "--name", APP_NAME, "--width", "1280", "--height", "840")
+        run(pnpm_cmd_str("init"), shell=True, cwd=pake_dir)
+        run(pnpm_cmd_str("add", "pake-cli"), shell=True, cwd=pake_dir)
+        cmd = pnpm_cmd_str("exec", "pake", f"http://{ADDR}", "--name", APP_NAME, "--width", "1280", "--height", "840")
         if (ROOT / "logo.png").exists():
-            cmd += ["--icon", str(ROOT / "logo.png")]
-        print("  $", " ".join(cmd))
-        subprocess.run(cmd, cwd=pake_dir, check=True)
+            cmd += f" --icon {ROOT / 'logo.png'}"
+        print("  $", cmd)
+        subprocess.run(cmd, shell=True, cwd=pake_dir, check=True)
         exe = find_pake_exe(pake_dir)
         if exe is None:
             raise RuntimeError("Pake did not produce .exe — see output above")
