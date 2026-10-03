@@ -107,6 +107,13 @@ def find_pake_exe(pake_dir: Path) -> Path | None:
     return None
 
 
+def pnpm_cmd(*args: str | Path) -> list[str]:
+    """Returns pnpm command, falling back to npx pnpm if pnpm is not in PATH."""
+    if shutil.which("pnpm"):
+        return ["pnpm", *(str(a) for a in args)]
+    return ["npx", "pnpm", *(str(a) for a in args)]
+
+
 def build_pake_app(work: Path) -> Path:
     """Builds Pake/Tauri wrapper over the panel and returns path to .exe."""
     print("Building Pake window (Node + pnpm + Rust required, first run is slow)...")
@@ -123,12 +130,9 @@ def build_pake_app(work: Path) -> Path:
                 time.sleep(0.5)
         pake_dir = work / "pake"
         pake_dir.mkdir()
-        run(["pnpm", "init"], cwd=pake_dir)
-        run(["pnpm", "add", "pake-cli"], cwd=pake_dir)
-        cmd = [
-            "pnpm", "exec", "pake", f"http://{ADDR}",
-            "--name", APP_NAME, "--width", "1280", "--height", "840",
-        ]
+        run(pnpm_cmd("init"), cwd=pake_dir)
+        run(pnpm_cmd("add", "pake-cli"), cwd=pake_dir)
+        cmd = pnpm_cmd("exec", "pake", f"http://{ADDR}", "--name", APP_NAME, "--width", "1280", "--height", "840")
         if (ROOT / "logo.png").exists():
             cmd += ["--icon", str(ROOT / "logo.png")]
         print("  $", " ".join(cmd))

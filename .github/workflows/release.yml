@@ -122,7 +122,8 @@ jobs:
           node-version: '20'
 
       - name: Install pnpm
-        run: npm install -g pnpm
+        shell: bash
+        run: corepack enable && corepack prepare pnpm@9 --activate
 
       - name: Rust toolchain (для Pake/Tauri)
         run: rustup default stable
