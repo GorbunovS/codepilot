@@ -30,13 +30,12 @@ jobs:
         shell: bash
         env:
           HEAD_MSG: ${{ github.event.head_commit.message }}
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.event.after }}
+          COMMITS_JSON: ${{ toJson(github.event.commits) }}
         run: |
           msg="${HEAD_MSG//$'\n'/ }"
           # merge-коммит может не содержать тега, поэтому смотрим все коммиты пуша
-          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
-            push_msgs="$(git log --format=%B "${BEFORE}..${AFTER}" 2>/dev/null | tr '\n' ' ')"
+          if [ -n "$COMMITS_JSON" ] && [ "$COMMITS_JSON" != "null" ]; then
+            push_msgs="$(echo "$COMMITS_JSON" | jq -r '.[].message' 2>/dev/null | tr '\n' ' ')"
             msg="$msg $push_msgs"
           fi
           if [[ "$msg" == *"[mac-only]"* ]]; then
