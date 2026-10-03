@@ -126,7 +126,8 @@ jobs:
         run: corepack enable && corepack prepare pnpm@9 --activate
 
       - name: Rust toolchain (для Pake/Tauri)
-        run: rustup default stable
+        shell: bash
+        run: rustup default stable || true
 
       - name: Install Inno Setup
         run: |
@@ -134,6 +135,7 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile "is.exe"
           Start-Process -FilePath "is.exe" -ArgumentList "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
           Remove-Item "is.exe"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\Inno Setup 6"
 
       - name: Install PyInstaller
         run: pip install pyinstaller

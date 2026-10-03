@@ -203,6 +203,18 @@ def assemble_dir(work: Path) -> Path:
     return out
 
 
+def iscc_cmd(*args: str | Path) -> list[str]:
+    """Returns Inno Setup compiler command, with fallback to standard install paths."""
+    if shutil.which("iscc"):
+        return ["iscc", *(str(a) for a in args)]
+    for root in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles")):
+        if root:
+            p = Path(root) / "Inno Setup 6" / "ISCC.exe"
+            if p.exists():
+                return [str(p), *(str(a) for a in args)]
+    return ["iscc", *(str(a) for a in args)]
+
+
 def build_installer(app_dir: Path, work: Path) -> Path:
     """Builds Inno Setup installer."""
     print("Building Inno Setup installer...")
@@ -230,7 +242,7 @@ Filename: "{{app}}\\{APP_NAME}.exe"; Description: "Run {APP_NAME}"; Flags: nowai
 """, encoding="utf-8")
     out = ROOT / "installers" / "windows" / "CodePilot-Setup.exe"
     out.parent.mkdir(parents=True, exist_ok=True)
-    run(["iscc", str(iss)], cwd=ROOT)
+    run(iscc_cmd(iss), cwd=ROOT)
     # JSON metadata for CI / manual checks
     meta = {
         "version": VERSION,
