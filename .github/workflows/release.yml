@@ -28,13 +28,14 @@ jobs:
       - uses: actions/checkout@v4
       - id: platform
         shell: bash
+        env:
+          MSG: ${{ github.event.head_commit.message }}
         run: |
-          msg="${{ github.event.head_commit.message }}"
-          msg="${msg//$'\n'/ }"
-          if grep -qE '(^|[[:space:]])\[mac-only\]($|[[:space:]])' <<< "$msg"; then
+          msg="${MSG//$'\n'/ }"
+          if [[ "$msg" == *"[mac-only]"* ]]; then
             echo "build_mac=true" >> "$GITHUB_OUTPUT"
             echo "build_win=false" >> "$GITHUB_OUTPUT"
-          elif grep -qE '(^|[[:space:]])\[win-only\]($|[[:space:]])' <<< "$msg"; then
+          elif [[ "$msg" == *"[win-only]"* ]]; then
             echo "build_mac=false" >> "$GITHUB_OUTPUT"
             echo "build_win=true" >> "$GITHUB_OUTPUT"
           else
@@ -110,7 +111,7 @@ jobs:
 
       - name: Install Inno Setup
         run: |
-          $url = "https://files.jrsoftware.org/is/6/innosetup-6.2.2.exe"
+          $url = "https://github.com/jrsoftware/issrc/releases/download/is-6_2_2/innosetup-6.2.2.exe"
           Invoke-WebRequest -Uri $url -OutFile "is.exe"
           Start-Process -FilePath "is.exe" -ArgumentList "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
           Remove-Item "is.exe"
