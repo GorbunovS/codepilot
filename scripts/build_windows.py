@@ -100,14 +100,15 @@ def find_pake_exe(pake_dir: Path) -> Path | None:
     candidates = [
         pake_dir / "src-tauri" / "target" / "release" / f"{APP_NAME}.exe",
         pake_dir / "src-tauri" / "target" / "x86_64-pc-windows-msvc" / "release" / f"{APP_NAME}.exe",
+        pake_dir / "src-tauri" / "target" / "release" / "app.exe",
+        pake_dir / "src-tauri" / "target" / "x86_64-pc-windows-msvc" / "release" / "app.exe",
     ]
     for c in candidates:
         if c.exists():
             return c
-    # fallback: recursive search
-    for p in pake_dir.rglob(f"{APP_NAME}.exe"):
-        if "bundle" not in str(p):
-            return p
+    # fallback: recursive search (bundle dirs may contain the built executable)
+    for p in pake_dir.rglob("*.exe"):
+        return p
     return None
 
 
