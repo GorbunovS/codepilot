@@ -29,9 +29,16 @@ jobs:
       - id: platform
         shell: bash
         env:
-          MSG: ${{ github.event.head_commit.message }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
         run: |
-          msg="${MSG//$'\n'/ }"
+          msg="${HEAD_MSG//$'\n'/ }"
+          # merge-коммит может не содержать тега, поэтому смотрим все коммиты пуша
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            push_msgs="$(git log --format=%B "${BEFORE}..${AFTER}" 2>/dev/null | tr '\n' ' ')"
+            msg="$msg $push_msgs"
+          fi
           if [[ "$msg" == *"[mac-only]"* ]]; then
             echo "build_mac=true" >> "$GITHUB_OUTPUT"
             echo "build_win=false" >> "$GITHUB_OUTPUT"
